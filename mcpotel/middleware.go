@@ -106,9 +106,9 @@ func Middleware(cfg Config) mcp.Middleware {
 
 			name := spanName(method, displayTarget)
 
-			attrs := []attribute.KeyValue{
-				AttrMCPMethodName.String(method),
-			}
+			// Pre-allocate for the common case: method + session + target + error.
+			attrs := make([]attribute.KeyValue, 0, 4)
+			attrs = append(attrs, AttrMCPMethodName.String(method))
 
 			if session := req.GetSession(); session != nil {
 				if id := session.ID(); id != "" {
@@ -116,7 +116,7 @@ func Middleware(cfg Config) mcp.Middleware {
 				}
 			}
 
-			attrs = append(attrs, targetAttributes(method, displayTarget)...)
+			appendTargetAttrs(&attrs, method, displayTarget)
 
 			ctx, span := tracer.Start(ctx, name,
 				trace.WithSpanKind(trace.SpanKindServer),

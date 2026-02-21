@@ -92,20 +92,19 @@ func extractToolError(result mcp.Result, redact func(error) string) string {
 	return "tool_error"
 }
 
-// targetAttributes returns the method-specific OTel attributes for a request.
-func targetAttributes(method, target string) []attribute.KeyValue {
+// appendTargetAttrs appends the method-specific OTel attribute directly to the
+// caller's slice, avoiding an intermediate allocation.
+func appendTargetAttrs(attrs *[]attribute.KeyValue, method, target string) {
 	if target == "" {
-		return nil
+		return
 	}
 
 	switch method {
 	case "tools/call":
-		return []attribute.KeyValue{AttrGenAIToolName.String(target)}
+		*attrs = append(*attrs, AttrGenAIToolName.String(target))
 	case "resources/read":
-		return []attribute.KeyValue{AttrMCPResourceURI.String(target)}
+		*attrs = append(*attrs, AttrMCPResourceURI.String(target))
 	case "prompts/get":
-		return []attribute.KeyValue{AttrGenAIPromptName.String(target)}
-	default:
-		return nil
+		*attrs = append(*attrs, AttrGenAIPromptName.String(target))
 	}
 }
