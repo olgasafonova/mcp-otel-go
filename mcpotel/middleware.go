@@ -51,16 +51,17 @@ type Config struct {
 	RedactURI func(uri string) string
 }
 
-// Middleware returns an MCP middleware that instruments every incoming method
-// call with OpenTelemetry spans and metrics.
-//
-// Usage:
-//
-//	server := mcp.NewServer(impl, opts)
-//	server.AddReceivingMiddleware(mcpotel.Middleware(mcpotel.Config{
-//	    ServiceName: "my-mcp-server",
-//	}))
-func Middleware(cfg Config) mcp.Middleware {
+// resolved holds the immutable, pre-computed state for the middleware.
+// Created once during Middleware() and captured by the closure.
+type resolved struct {
+	tracer    trace.Tracer
+	meters    *meters
+	redactErr func(error) string
+	redactURI func(string) string
+	filter    func(string) bool
+}
+
+func resolve(cfg Config) resolved {
 	tp := cfg.TracerProvider
 	if tp == nil {
 		tp = otel.GetTracerProvider()
@@ -76,8 +77,6 @@ func Middleware(cfg Config) mcp.Middleware {
 		redactErr = errorTypeName
 	}
 
-	redactURI := cfg.RedactURI
-
 	tracer := tp.Tracer(
 		instrumentationName,
 		trace.WithInstrumentationVersion("0.1.0"),
@@ -90,9 +89,39 @@ func Middleware(cfg Config) mcp.Middleware {
 		m = nil
 	}
 
+	return resolved{
+		tracer:    tracer,
+		meters:    m,
+		redactErr: redactErr,
+		redactURI: cfg.RedactURI,
+		filter:    cfg.Filter,
+	}
+}
+
+// recordError sets the span error status and appends the error attribute
+// for both span and metric recording.
+func recordError(span trace.Span, attrs *[]attribute.KeyValue, errMsg string) {
+	span.SetStatus(codes.Error, errMsg)
+	errAttr := AttrErrorType.String(errMsg)
+	span.SetAttributes(errAttr)
+	*attrs = append(*attrs, errAttr)
+}
+
+// Middleware returns an MCP middleware that instruments every incoming method
+// call with OpenTelemetry spans and metrics.
+//
+// Usage:
+//
+//	server := mcp.NewServer(impl, opts)
+//	server.AddReceivingMiddleware(mcpotel.Middleware(mcpotel.Config{
+//	    ServiceName: "my-mcp-server",
+//	}))
+func Middleware(cfg Config) mcp.Middleware {
+	r := resolve(cfg)
+
 	return func(next mcp.MethodHandler) mcp.MethodHandler {
 		return func(ctx context.Context, method string, req mcp.Request) (mcp.Result, error) {
-			if cfg.Filter != nil && !cfg.Filter(method) {
+			if r.filter != nil && !r.filter(method) {
 				return next(ctx, method, req)
 			}
 
@@ -100,8 +129,8 @@ func Middleware(cfg Config) mcp.Middleware {
 
 			// Apply URI redaction for resource reads.
 			displayTarget := target
-			if method == "resources/read" && redactURI != nil && target != "" {
-				displayTarget = redactURI(target)
+			if method == "resources/read" && r.redactURI != nil && target != "" {
+				displayTarget = r.redactURI(target)
 			}
 
 			name := spanName(method, displayTarget)
@@ -118,7 +147,7 @@ func Middleware(cfg Config) mcp.Middleware {
 
 			appendTargetAttrs(&attrs, method, displayTarget)
 
-			ctx, span := tracer.Start(ctx, name,
+			ctx, span := r.tracer.Start(ctx, name,
 				trace.WithSpanKind(trace.SpanKindServer),
 				trace.WithAttributes(attrs...),
 			)
@@ -128,28 +157,22 @@ func Middleware(cfg Config) mcp.Middleware {
 			result, err := next(ctx, method, req)
 			duration := time.Since(start)
 
+			// Determine error message from either surface.
+			var errMsg string
 			if err != nil {
-				// Protocol-level error (tool not found, invalid params, etc.)
-				redacted := redactErr(err)
-				span.SetStatus(codes.Error, redacted)
-				errAttr := AttrErrorType.String(redacted)
-				span.SetAttributes(errAttr)
-				attrs = append(attrs, errAttr)
-			} else if toolErr := extractToolError(result, redactErr); toolErr != "" {
-				// Application-level tool error: the go-sdk wraps tool handler
-				// errors into CallToolResult with IsError=true instead of
-				// returning a Go error. Without this check, failing tools
-				// would appear as successful in traces.
-				span.SetStatus(codes.Error, toolErr)
-				errAttr := AttrErrorType.String(toolErr)
-				span.SetAttributes(errAttr)
-				attrs = append(attrs, errAttr)
+				errMsg = r.redactErr(err)
+			} else {
+				errMsg = extractToolError(result, r.redactErr)
+			}
+
+			if errMsg != "" {
+				recordError(span, &attrs, errMsg)
 			} else {
 				span.SetStatus(codes.Ok, "")
 			}
 
-			if m != nil {
-				m.recordDuration(ctx, duration, attrs)
+			if r.meters != nil {
+				r.meters.recordDuration(ctx, duration, attrs)
 			}
 
 			return result, err
