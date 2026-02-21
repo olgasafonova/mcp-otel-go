@@ -2,6 +2,8 @@ package mcpotel
 
 import (
 	"context"
+	"fmt"
+	"net/url"
 	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -31,6 +33,22 @@ type Config struct {
 	// Filter returns false for methods that should not be instrumented.
 	// When nil, all methods are instrumented.
 	Filter func(method string) bool
+
+	// RedactError controls how error messages are recorded in spans and metrics.
+	// Error messages from tool handlers may contain PII (e.g., user emails,
+	// file paths). This function lets you sanitize or classify them.
+	//
+	// When nil, defaults to recording the Go error type name only (e.g.,
+	// "*json.SyntaxError"), not the full message. Set to ErrorMessageFull
+	// to record complete error messages if your errors are known to be PII-free.
+	RedactError func(err error) string
+
+	// RedactURI controls how resource URIs are recorded in spans and metrics.
+	// URIs may contain user-identifiable paths or query parameters.
+	//
+	// When nil, defaults to recording the full URI. Set to URISchemeOnly
+	// to record only the scheme (e.g., "file://", "user://").
+	RedactURI func(uri string) string
 }
 
 // Middleware returns an MCP middleware that instruments every incoming method
@@ -53,6 +71,13 @@ func Middleware(cfg Config) mcp.Middleware {
 		mp = otel.GetMeterProvider()
 	}
 
+	redactErr := cfg.RedactError
+	if redactErr == nil {
+		redactErr = errorTypeName
+	}
+
+	redactURI := cfg.RedactURI
+
 	tracer := tp.Tracer(
 		instrumentationName,
 		trace.WithInstrumentationVersion("0.1.0"),
@@ -72,7 +97,14 @@ func Middleware(cfg Config) mcp.Middleware {
 			}
 
 			target := extractTarget(method, req)
-			name := spanName(method, target)
+
+			// Apply URI redaction for resource reads.
+			displayTarget := target
+			if method == "resources/read" && redactURI != nil && target != "" {
+				displayTarget = redactURI(target)
+			}
+
+			name := spanName(method, displayTarget)
 
 			attrs := []attribute.KeyValue{
 				AttrMCPMethodName.String(method),
@@ -84,7 +116,7 @@ func Middleware(cfg Config) mcp.Middleware {
 				}
 			}
 
-			attrs = append(attrs, targetAttributes(method, target)...)
+			attrs = append(attrs, targetAttributes(method, displayTarget)...)
 
 			ctx, span := tracer.Start(ctx, name,
 				trace.WithSpanKind(trace.SpanKindServer),
@@ -98,12 +130,12 @@ func Middleware(cfg Config) mcp.Middleware {
 
 			if err != nil {
 				// Protocol-level error (tool not found, invalid params, etc.)
-				span.SetStatus(codes.Error, err.Error())
-				span.RecordError(err)
-				errAttr := AttrErrorType.String(errorType(err))
+				redacted := redactErr(err)
+				span.SetStatus(codes.Error, redacted)
+				errAttr := AttrErrorType.String(redacted)
 				span.SetAttributes(errAttr)
 				attrs = append(attrs, errAttr)
-			} else if toolErr := extractToolError(result); toolErr != "" {
+			} else if toolErr := extractToolError(result, redactErr); toolErr != "" {
 				// Application-level tool error: the go-sdk wraps tool handler
 				// errors into CallToolResult with IsError=true instead of
 				// returning a Go error. Without this check, failing tools
@@ -125,10 +157,26 @@ func Middleware(cfg Config) mcp.Middleware {
 	}
 }
 
-// errorType returns a short classification string for the error.
-func errorType(err error) string {
-	if err == nil {
-		return ""
-	}
+// --- Built-in redaction functions ---
+
+// ErrorMessageFull records the complete error message. Use this only when
+// you are confident your error messages never contain PII.
+func ErrorMessageFull(err error) string {
 	return err.Error()
+}
+
+// errorTypeName returns the Go type name of the error (e.g., "*json.SyntaxError").
+// This is the default RedactError behavior: safe because type names are
+// developer-defined and never contain user data.
+func errorTypeName(err error) string {
+	return fmt.Sprintf("%T", err)
+}
+
+// URISchemeOnly records only the URI scheme (e.g., "file://", "miro://").
+// Use this when resource URIs may contain user-identifiable paths.
+func URISchemeOnly(uri string) string {
+	if u, err := url.Parse(uri); err == nil && u.Scheme != "" {
+		return u.Scheme + "://"
+	}
+	return "unknown://"
 }

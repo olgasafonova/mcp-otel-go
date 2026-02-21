@@ -26,7 +26,7 @@ func main() {
 	tp := sdktrace.NewTracerProvider(
 		sdktrace.WithBatcher(exporter),
 	)
-	defer tp.Shutdown(ctx)
+	defer func() { _ = tp.Shutdown(ctx) }()
 	otel.SetTracerProvider(tp)
 
 	// Create the MCP server

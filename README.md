@@ -46,31 +46,92 @@ This middleware catches both. It inspects `CallToolResult.IsError` after every `
 | Resource URI | `mcp.resource.uri = "miro://board/123"` |
 | Prompt name | `gen_ai.prompt.name = "summarize"` |
 | Session ID | `mcp.session.id = "abc123"` |
-| Error type (both surfaces) | `error.type = "database connection lost"` |
+| Error type (both surfaces) | `error.type = "*errors.errorString"` |
 | Duration histogram | `mcp.server.operation.duration` (seconds) |
 
 All attribute names follow the [OTel semantic conventions for MCP](https://opentelemetry.io/docs/specs/semconv/gen-ai/mcp/).
 
 ## What does NOT get collected
 
-Privacy-safe by design. The middleware never records:
+Privacy-safe by default. The middleware never records:
 
 - Tool arguments or return values
 - Resource content
 - Environment variables or file paths
 - IP addresses or user-identifiable information
+- Full error messages (only Go type names like `*json.SyntaxError`, not the message text)
 
-Only method names, tool names, resource URIs, timing, error types, and session IDs.
+Only method names, tool names, timing, error type names, and session IDs. Resource URIs are recorded by default but can be redacted (see below).
+
+## Privacy controls
+
+Error messages from tool handlers can contain PII (e.g., `"user john@example.com not found"`). Resource URIs can contain user-identifiable paths (e.g., `"user://john.doe/profile"`). The middleware provides two redaction hooks to control what reaches your telemetry backend.
+
+### Error redaction (on by default)
+
+By default, only the Go error type name is recorded (e.g., `*json.SyntaxError`), not the full error message. This is safe because type names are developer-defined and never contain user data.
+
+```go
+// Default behavior: records "*json.SyntaxError", not "invalid field: email john@example.com"
+mcpotel.Middleware(mcpotel.Config{
+    ServiceName: "my-server",
+})
+```
+
+Opt in to full error messages only if your errors are known to be PII-free:
+
+```go
+mcpotel.Middleware(mcpotel.Config{
+    ServiceName: "my-server",
+    RedactError: mcpotel.ErrorMessageFull,
+})
+```
+
+Or provide your own classifier:
+
+```go
+mcpotel.Middleware(mcpotel.Config{
+    ServiceName: "my-server",
+    RedactError: func(err error) string {
+        // Classify by error type, strip PII, or return a fixed string
+        return "internal_error"
+    },
+})
+```
+
+### URI redaction (opt-in)
+
+Resource URIs are recorded in full by default. If your URIs contain user-identifiable paths, enable scheme-only recording:
+
+```go
+mcpotel.Middleware(mcpotel.Config{
+    ServiceName: "my-server",
+    RedactURI:   mcpotel.URISchemeOnly, // "file:///home/john/secret.txt" → "file://"
+})
+```
+
+### Data controller responsibility
+
+This middleware is a data processor. You, as the MCP server operator, are the data controller. You decide:
+
+- Which telemetry backend receives the data
+- How long spans and metrics are retained
+- Whether error messages or URIs need redaction for your use case
+- Compliance with GDPR, CCPA, or other applicable regulations
+
+Session IDs are random protocol identifiers, not user identifiers. They become pseudonymous data only if your telemetry backend correlates them with user identity through other means.
 
 ## Config
 
 ```go
 type Config struct {
-    ServiceName    string                // Required. OTel service.name
-    ServiceVersion string                // Optional. service.version
-    TracerProvider trace.TracerProvider   // Optional. Defaults to otel.GetTracerProvider()
-    MeterProvider  metric.MeterProvider  // Optional. Defaults to otel.GetMeterProvider()
+    ServiceName    string                    // Required. OTel service.name
+    ServiceVersion string                    // Optional. service.version
+    TracerProvider trace.TracerProvider       // Optional. Defaults to otel.GetTracerProvider()
+    MeterProvider  metric.MeterProvider      // Optional. Defaults to otel.GetMeterProvider()
     Filter         func(method string) bool  // Optional. Return false to skip a method
+    RedactError    func(err error) string    // Optional. Defaults to Go type name only
+    RedactURI      func(uri string) string   // Optional. Nil = full URI recorded
 }
 ```
 

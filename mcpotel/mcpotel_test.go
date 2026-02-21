@@ -28,13 +28,13 @@ func setupServer(t *testing.T, cfg mcpotel.Config) (*mcp.Server, *tracetest.InMe
 	tp := sdktrace.NewTracerProvider(
 		sdktrace.WithSyncer(spanExporter),
 	)
-	t.Cleanup(func() { tp.Shutdown(context.Background()) })
+	t.Cleanup(func() { _ = tp.Shutdown(context.Background()) })
 
 	metricReader := sdkmetric.NewManualReader()
 	mp := sdkmetric.NewMeterProvider(
 		sdkmetric.WithReader(metricReader),
 	)
-	t.Cleanup(func() { mp.Shutdown(context.Background()) })
+	t.Cleanup(func() { _ = mp.Shutdown(context.Background()) })
 
 	cfg.TracerProvider = tp
 	cfg.MeterProvider = mp
@@ -56,14 +56,14 @@ func connect(t *testing.T, s *mcp.Server) *mcp.ClientSession {
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { ss.Close() })
+	t.Cleanup(func() { _ = ss.Close() })
 
 	c := mcp.NewClient(testImpl, nil)
 	cs, err := c.Connect(ctx, ct, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { cs.Close() })
+	t.Cleanup(func() { _ = cs.Close() })
 
 	return cs
 }
@@ -175,8 +175,71 @@ func TestMiddleware_ToolHandlerError(t *testing.T) {
 		t.Errorf("expected error status for tool handler error, got %v", span.Status.Code)
 	}
 
-	// error.type attribute should be present
-	assertAttribute(t, span, "error.type", "database connection lost")
+	// Default RedactError records type name, not the message (PII-safe)
+	assertAttribute(t, span, "error.type", "*errors.errorString")
+}
+
+func TestMiddleware_RedactErrorFull(t *testing.T) {
+	// Opt-in to full error messages when you know they're PII-free.
+	s, spanExp, _ := setupServer(t, mcpotel.Config{
+		ServiceName: "test-server",
+		RedactError: mcpotel.ErrorMessageFull,
+	})
+
+	mcp.AddTool(s, &mcp.Tool{Name: "fail"}, func(_ context.Context, _ *mcp.CallToolRequest, args map[string]any) (*mcp.CallToolResult, any, error) {
+		return nil, nil, errors.New("invalid input format")
+	})
+
+	cs := connect(t, s)
+
+	ctx := context.Background()
+	if _, err := cs.CallTool(ctx, &mcp.CallToolParams{Name: "fail"}); err != nil {
+		t.Fatal(err)
+	}
+
+	spans := spanExp.GetSpans()
+	span := findSpan(spans, "tools/call fail")
+	if span == nil {
+		t.Fatalf("expected span, got: %v", spanNames(spans))
+	}
+
+	// With ErrorMessageFull, the actual message is recorded
+	assertAttribute(t, span, "error.type", "invalid input format")
+}
+
+func TestMiddleware_RedactURI(t *testing.T) {
+	s, spanExp, _ := setupServer(t, mcpotel.Config{
+		ServiceName: "test-server",
+		RedactURI:   mcpotel.URISchemeOnly,
+	})
+
+	// We can't easily register a resource handler through the public API
+	// to test resources/read, but we can verify the URI redaction function
+	// works correctly in isolation.
+	result := mcpotel.URISchemeOnly("file:///home/john/secret.txt")
+	if result != "file://" {
+		t.Errorf("URISchemeOnly: got %q, want %q", result, "file://")
+	}
+
+	result = mcpotel.URISchemeOnly("miro://board/abc123")
+	if result != "miro://" {
+		t.Errorf("URISchemeOnly: got %q, want %q", result, "miro://")
+	}
+
+	// Verify the server still works with RedactURI set
+	mcp.AddTool(s, &mcp.Tool{Name: "nop"}, func(_ context.Context, _ *mcp.CallToolRequest, args map[string]any) (*mcp.CallToolResult, any, error) {
+		return nil, nil, nil
+	})
+
+	cs := connect(t, s)
+	if _, err := cs.CallTool(context.Background(), &mcp.CallToolParams{Name: "nop"}); err != nil {
+		t.Fatal(err)
+	}
+
+	spans := spanExp.GetSpans()
+	if findSpan(spans, "tools/call nop") == nil {
+		t.Error("expected tools/call span")
+	}
 }
 
 func TestMiddleware_ListTools(t *testing.T) {

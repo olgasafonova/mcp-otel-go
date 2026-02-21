@@ -78,13 +78,16 @@ func spanName(method, target string) string {
 // The go-sdk converts tool handler errors into CallToolResult{IsError: true}
 // instead of propagating them as Go errors. GetError() returns the original
 // error on the server side; we fall back to "tool_error" if unavailable.
-func extractToolError(result mcp.Result) string {
+//
+// The redact function controls how error messages are recorded. It is never
+// nil when called from the middleware (defaults to errorTypeName).
+func extractToolError(result mcp.Result, redact func(error) string) string {
 	ctr, ok := result.(*mcp.CallToolResult)
 	if !ok || !ctr.IsError {
 		return ""
 	}
 	if err := ctr.GetError(); err != nil {
-		return err.Error()
+		return redact(err)
 	}
 	return "tool_error"
 }
