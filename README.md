@@ -178,50 +178,134 @@ server.AddReceivingMiddleware(mcpotel.Middleware(mcpotel.Config{
 }))
 ```
 
-## Quick start with otel-tui
+## Try it locally
 
-[otel-tui](https://github.com/ymtdzzz/otel-tui) is a terminal UI that receives OTLP and displays traces and metrics. No Prometheus, Grafana, or Docker required.
+The `examples/otlp/` demo exports traces and metrics over gRPC to `localhost:4317`. Point any OTLP-compatible backend at it — no code changes needed.
 
-**Install:**
+**Generate telemetry** (same for every backend):
+
+```bash
+# Terminal — run the OTLP example via MCP Inspector
+npx @modelcontextprotocol/inspector go run ./examples/otlp
+```
+
+Connect in the Inspector UI, call the `greet` tool a few times. Then check your backend for:
+
+- `tools/call greet` spans with `mcp.method.name`, `gen_ai.tool.name`, `mcp.session.id` attributes
+- `mcp.server.operation.duration` histogram
+
+Set `OTEL_EXPORTER_OTLP_ENDPOINT` to override the default `localhost:4317`.
+
+### otel-tui (no Docker, no setup)
+
+Terminal UI that receives OTLP directly. Fastest way to see traces.
 
 ```bash
 brew install ymtdzzz/tap/otel-tui   # macOS
 # or: go install github.com/ymtdzzz/otel-tui@latest
+otel-tui                             # listens on :4317
 ```
 
-**Run (two terminals):**
+### Jaeger (traces)
 
-```bash
-# Terminal 1 — start the collector UI
-otel-tui
-
-# Terminal 2 — run the OTLP example server
-cd mcp-otel-go
-go run ./examples/otlp
-```
-
-Then use [MCP Inspector](https://github.com/modelcontextprotocol/inspector) to call tools:
-
-```bash
-npx @modelcontextprotocol/inspector go run ./examples/otlp
-```
-
-Call the `greet` tool a few times. Switch to the otel-tui terminal:
-
-- **Traces tab** shows `tools/call greet` spans with `mcp.method.name`, `gen_ai.tool.name`, and `mcp.session.id` attributes
-- **Metrics tab** shows the `mcp.server.operation.duration` histogram
-
-The OTLP example exports both traces and metrics over gRPC to `localhost:4317`. Set `OTEL_EXPORTER_OTLP_ENDPOINT` to point elsewhere.
-
-### Alternative: Jaeger
-
-For a richer web UI with trace waterfall diagrams, use [Jaeger](https://www.jaegertracing.io/) (requires Docker):
+Web UI with trace waterfall diagrams and dependency graphs.
 
 ```bash
 docker run -d -p 16686:16686 -p 4317:4317 jaegertracing/jaeger:latest
 ```
 
-Open `http://localhost:16686`, then run the OTLP example the same way. No code changes needed — same OTLP endpoint.
+Open `http://localhost:16686`. Select the `example-server` service to see traces.
+
+### Grafana + Tempo + Prometheus (traces + metrics)
+
+Full observability stack with dashboards. Create a `docker-compose.yml`:
+
+```yaml
+services:
+  tempo:
+    image: grafana/tempo:latest
+    command: ["-config.file=/etc/tempo.yaml"]
+    volumes:
+      - ./tempo.yaml:/etc/tempo.yaml
+    ports:
+      - "4317:4317"
+
+  prometheus:
+    image: prom/prometheus:latest
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml
+    ports:
+      - "9090:9090"
+
+  grafana:
+    image: grafana/grafana:latest
+    ports:
+      - "3000:3000"
+    environment:
+      - GF_AUTH_ANONYMOUS_ENABLED=true
+      - GF_AUTH_ANONYMOUS_ORG_ROLE=Admin
+```
+
+Add a minimal `tempo.yaml`:
+
+```yaml
+server:
+  http_listen_port: 3200
+
+distributor:
+  receivers:
+    otlp:
+      protocols:
+        grpc:
+          endpoint: "0.0.0.0:4317"
+
+storage:
+  trace:
+    backend: local
+    local:
+      path: /tmp/tempo/blocks
+```
+
+```bash
+docker compose up -d
+```
+
+Open `http://localhost:3000`, add Tempo as a data source (`http://tempo:3200`), and explore traces.
+
+### Datadog
+
+Set your API key and site, then use the Datadog Agent as the OTLP collector:
+
+```bash
+docker run -d \
+  -e DD_API_KEY=<your-api-key> \
+  -e DD_SITE=datadoghq.com \
+  -e DD_OTLP_CONFIG_RECEIVER_PROTOCOLS_GRPC_ENDPOINT=0.0.0.0:4317 \
+  -p 4317:4317 \
+  gcr.io/datadoghq/agent:latest
+```
+
+Traces and metrics appear in the [Datadog APM](https://app.datadoghq.com/apm) dashboard.
+
+### Honeycomb
+
+Cloud-native observability with a [generous free tier](https://www.honeycomb.io/pricing). No Docker needed — send OTLP directly:
+
+```bash
+OTEL_EXPORTER_OTLP_ENDPOINT=https://api.honeycomb.io \
+OTEL_EXPORTER_OTLP_HEADERS="x-honeycomb-team=<your-api-key>" \
+go run ./examples/otlp
+```
+
+### Grafana Cloud
+
+[Free tier](https://grafana.com/pricing/) includes traces and metrics. Get your OTLP endpoint and token from the Grafana Cloud portal:
+
+```bash
+OTEL_EXPORTER_OTLP_ENDPOINT=https://otlp-gateway-<zone>.grafana.net/otlp \
+OTEL_EXPORTER_OTLP_HEADERS="Authorization=Basic <base64-encoded-credentials>" \
+go run ./examples/otlp
+```
 
 ## Dependencies
 
