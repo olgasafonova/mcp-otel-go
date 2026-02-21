@@ -356,6 +356,116 @@ func TestMiddleware_SessionID(t *testing.T) {
 	}
 }
 
+func TestMiddleware_ResourceRead(t *testing.T) {
+	s, spanExp, _ := setupServer(t, mcpotel.Config{
+		ServiceName: "test-server",
+	})
+
+	s.AddResource(&mcp.Resource{
+		Name: "greeting",
+		URI:  "test://greetings/hello",
+	}, func(_ context.Context, _ *mcp.ReadResourceRequest) (*mcp.ReadResourceResult, error) {
+		return &mcp.ReadResourceResult{
+			Contents: []*mcp.ResourceContents{
+				{URI: "test://greetings/hello", Text: "Hello, world!"},
+			},
+		}, nil
+	})
+
+	cs := connect(t, s)
+
+	ctx := context.Background()
+	_, err := cs.ReadResource(ctx, &mcp.ReadResourceParams{URI: "test://greetings/hello"})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	spans := spanExp.GetSpans()
+	span := findSpan(spans, "resources/read test://greetings/hello")
+	if span == nil {
+		t.Fatalf("expected span 'resources/read test://greetings/hello', got spans: %v", spanNames(spans))
+	}
+
+	assertAttribute(t, span, "mcp.method.name", "resources/read")
+	assertAttribute(t, span, "mcp.resource.uri", "test://greetings/hello")
+}
+
+func TestMiddleware_ResourceReadWithRedactURI(t *testing.T) {
+	s, spanExp, _ := setupServer(t, mcpotel.Config{
+		ServiceName: "test-server",
+		RedactURI:   mcpotel.URISchemeOnly,
+	})
+
+	s.AddResource(&mcp.Resource{
+		Name: "secret",
+		URI:  "file:///home/john/secret.txt",
+	}, func(_ context.Context, _ *mcp.ReadResourceRequest) (*mcp.ReadResourceResult, error) {
+		return &mcp.ReadResourceResult{
+			Contents: []*mcp.ResourceContents{
+				{URI: "file:///home/john/secret.txt", Text: "secret data"},
+			},
+		}, nil
+	})
+
+	cs := connect(t, s)
+
+	ctx := context.Background()
+	_, err := cs.ReadResource(ctx, &mcp.ReadResourceParams{URI: "file:///home/john/secret.txt"})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	spans := spanExp.GetSpans()
+	// Span name uses redacted URI when RedactURI is set
+	span := findSpan(spans, "resources/read file://")
+	if span == nil {
+		t.Fatalf("expected span with redacted URI, got spans: %v", spanNames(spans))
+	}
+
+	assertAttribute(t, span, "mcp.resource.uri", "file://")
+}
+
+func TestMiddleware_PromptGet(t *testing.T) {
+	s, spanExp, _ := setupServer(t, mcpotel.Config{
+		ServiceName: "test-server",
+	})
+
+	s.AddPrompt(&mcp.Prompt{
+		Name:        "summarize",
+		Description: "Summarize text",
+	}, func(_ context.Context, _ *mcp.GetPromptRequest) (*mcp.GetPromptResult, error) {
+		return &mcp.GetPromptResult{
+			Messages: []*mcp.PromptMessage{
+				{Role: "user", Content: &mcp.TextContent{Text: "Please summarize"}},
+			},
+		}, nil
+	})
+
+	cs := connect(t, s)
+
+	ctx := context.Background()
+	_, err := cs.GetPrompt(ctx, &mcp.GetPromptParams{Name: "summarize"})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	spans := spanExp.GetSpans()
+	span := findSpan(spans, "prompts/get summarize")
+	if span == nil {
+		t.Fatalf("expected span 'prompts/get summarize', got spans: %v", spanNames(spans))
+	}
+
+	assertAttribute(t, span, "mcp.method.name", "prompts/get")
+	assertAttribute(t, span, "gen_ai.prompt.name", "summarize")
+}
+
+func TestURISchemeOnly_NoScheme(t *testing.T) {
+	result := mcpotel.URISchemeOnly("just-a-path")
+	if result != "unknown://" {
+		t.Errorf("URISchemeOnly(%q) = %q, want %q", "just-a-path", result, "unknown://")
+	}
+}
+
 // --- examples (appear on pkg.go.dev) ---
 
 func ExampleMiddleware() {
