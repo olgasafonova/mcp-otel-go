@@ -1,8 +1,16 @@
 # mcp-otel-go
 
-OpenTelemetry middleware for Go MCP servers built with the [official go-sdk](https://github.com/modelcontextprotocol/go-sdk).
+Your MCP server tools are failing and you can't see it.
 
-One function call adds tracing and metrics to every MCP method. Follows the [OTel semantic conventions for MCP](https://opentelemetry.io/docs/specs/semconv/gen-ai/mcp/).
+The [go-sdk](https://github.com/modelcontextprotocol/go-sdk) silently converts tool handler errors into successful responses (`CallToolResult` with `IsError: true`). No logs, no metrics, no traces. A tool that crashes on every third call looks identical to one that works perfectly.
+
+This package fixes that. One function call gives you OpenTelemetry tracing and metrics for every MCP method, including the silent tool errors that the SDK hides from you.
+
+## Who is this for?
+
+You're building MCP servers in Go with the official go-sdk. You already have OTel infrastructure (Jaeger, Grafana Tempo, Prometheus, Datadog) and you want your MCP servers reporting into it. You shouldn't have to write custom instrumentation for every tool handler.
+
+If you're using TypeScript, check out [MCPcat](https://github.com/MCPCat/mcp-cat) or [Shinzo Labs](https://github.com/shinzo-labs/otel-mcp). This is the Go equivalent. Nothing else exists for Go today.
 
 ## Install
 
@@ -13,8 +21,6 @@ go get github.com/olgasafonova/mcp-otel-go/mcpotel
 ## Usage
 
 ```go
-import "github.com/olgasafonova/mcp-otel-go/mcpotel"
-
 server := mcp.NewServer(impl, opts)
 server.AddReceivingMiddleware(mcpotel.Middleware(mcpotel.Config{
     ServiceName:    "my-mcp-server",
@@ -22,31 +28,43 @@ server.AddReceivingMiddleware(mcpotel.Middleware(mcpotel.Config{
 }))
 ```
 
-That's it. Every incoming MCP method call now produces an OTel span and a duration histogram.
+Three lines. Every incoming MCP method call now produces an OTel span and a duration histogram.
+
+## Two error surfaces, both covered
+
+MCP tool errors split into two categories, and most instrumentation only catches one.
+
+**Protocol errors** happen when the tool doesn't exist or params are invalid. The go-sdk returns these as normal Go errors. Easy to catch.
+
+**Application errors** happen when your tool handler returns an error (database down, API timeout, bad input). The go-sdk wraps these into `CallToolResult{IsError: true}` and returns `nil` for the error. Your middleware sees a "successful" call. Your dashboard shows green. Your users see failures.
+
+This middleware catches both. It inspects `CallToolResult.IsError` after every `tools/call` and marks the span as an error with the original error message.
 
 ## What gets collected
 
 | Data | Example |
 |------|---------|
 | Span per method call | `tools/call miro_create_sticky` |
-| Method name attribute | `mcp.method.name = "tools/call"` |
-| Tool name (for tools/call) | `gen_ai.tool.name = "miro_create_sticky"` |
-| Resource URI (for resources/read) | `mcp.resource.uri = "miro://board/123"` |
-| Prompt name (for prompts/get) | `gen_ai.prompt.name = "summarize"` |
+| Method name | `mcp.method.name = "tools/call"` |
+| Tool name | `gen_ai.tool.name = "miro_create_sticky"` |
+| Resource URI | `mcp.resource.uri = "miro://board/123"` |
+| Prompt name | `gen_ai.prompt.name = "summarize"` |
 | Session ID | `mcp.session.id = "abc123"` |
-| Error status + type | `error.type = "unknown tool \"foo\""` |
+| Error type (both surfaces) | `error.type = "database connection lost"` |
 | Duration histogram | `mcp.server.operation.duration` (seconds) |
+
+All attribute names follow the [OTel semantic conventions for MCP](https://opentelemetry.io/docs/specs/semconv/gen-ai/mcp/).
 
 ## What does NOT get collected
 
-The middleware is privacy-safe by design:
+Privacy-safe by design. The middleware never records:
 
-- No tool arguments or return values
-- No resource content
-- No environment variables or file paths
-- No IP addresses or user-identifiable information
+- Tool arguments or return values
+- Resource content
+- Environment variables or file paths
+- IP addresses or user-identifiable information
 
-Only: method names, tool names, resource URIs, timing, error types, session IDs.
+Only method names, tool names, resource URIs, timing, error types, and session IDs.
 
 ## Config
 
@@ -75,10 +93,9 @@ mcpotel.Middleware(mcpotel.Config{
 
 ## Bring your own exporter
 
-This package has zero opinions on where telemetry goes. Configure your `TracerProvider` and `MeterProvider` at app startup as usual:
+No opinions on where telemetry goes. Configure your providers at startup as usual:
 
 ```go
-// OTLP to Jaeger/Tempo/etc.
 exporter, _ := otlptracegrpc.New(ctx)
 tp := sdktrace.NewTracerProvider(sdktrace.WithBatcher(exporter))
 otel.SetTracerProvider(tp)
