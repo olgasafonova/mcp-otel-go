@@ -178,6 +178,51 @@ server.AddReceivingMiddleware(mcpotel.Middleware(mcpotel.Config{
 }))
 ```
 
+## Quick start with otel-tui
+
+[otel-tui](https://github.com/ymtdzzz/otel-tui) is a terminal UI that receives OTLP and displays traces and metrics. No Prometheus, Grafana, or Docker required.
+
+**Install:**
+
+```bash
+brew install ymtdzzz/tap/otel-tui   # macOS
+# or: go install github.com/ymtdzzz/otel-tui@latest
+```
+
+**Run (two terminals):**
+
+```bash
+# Terminal 1 — start the collector UI
+otel-tui
+
+# Terminal 2 — run the OTLP example server
+cd mcp-otel-go
+go run ./examples/otlp
+```
+
+Then use [MCP Inspector](https://github.com/modelcontextprotocol/inspector) to call tools:
+
+```bash
+npx @modelcontextprotocol/inspector go run ./examples/otlp
+```
+
+Call the `greet` tool a few times. Switch to the otel-tui terminal:
+
+- **Traces tab** shows `tools/call greet` spans with `mcp.method.name`, `gen_ai.tool.name`, and `mcp.session.id` attributes
+- **Metrics tab** shows the `mcp.server.operation.duration` histogram
+
+The OTLP example exports both traces and metrics over gRPC to `localhost:4317`. Set `OTEL_EXPORTER_OTLP_ENDPOINT` to point elsewhere.
+
+### Alternative: Jaeger
+
+For a richer web UI with trace waterfall diagrams, use [Jaeger](https://www.jaegertracing.io/) (requires Docker):
+
+```bash
+docker run -d -p 16686:16686 -p 4317:4317 jaegertracing/jaeger:latest
+```
+
+Open `http://localhost:16686`, then run the OTLP example the same way. No code changes needed — same OTLP endpoint.
+
 ## Dependencies
 
 - `github.com/modelcontextprotocol/go-sdk` v1.3.0+
