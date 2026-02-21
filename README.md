@@ -2,9 +2,9 @@
 
 [![Go Report Card](https://goreportcard.com/badge/github.com/olgasafonova/mcp-otel-go)](https://goreportcard.com/report/github.com/olgasafonova/mcp-otel-go)
 
-OpenTelemetry tracing and metrics for Go MCP servers. One function call instruments every method in a [go-sdk](https://github.com/modelcontextprotocol/go-sdk) server, following the [OTel semantic conventions for MCP](https://opentelemetry.io/docs/specs/semconv/gen-ai/mcp/).
+OpenTelemetry (OTel) tracing and metrics for Go MCP servers. One function call instruments every method in a [go-sdk](https://github.com/modelcontextprotocol/go-sdk) server, following the [OTel semantic conventions for MCP](https://opentelemetry.io/docs/specs/semconv/gen-ai/mcp/).
 
-The go-sdk doesn't include observability out of the box, and existing OTel integrations for MCP ([MCPcat](https://github.com/MCPCat/mcp-cat), [Shinzo Labs](https://github.com/shinzo-labs/otel-mcp)) are TypeScript-only. This is the Go equivalent.
+The go-sdk doesn't include observability out of the box, and existing OpenTelemetry integrations for MCP ([MCPcat](https://github.com/MCPCat/mcp-cat), [Shinzo Labs](https://github.com/shinzo-labs/otel-mcp)) are TypeScript-only. This is the Go equivalent.
 
 ## Who is this for?
 
