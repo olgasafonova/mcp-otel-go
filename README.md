@@ -1,16 +1,12 @@
 # mcp-otel-go
 
-Your MCP server tools are failing and you can't see it.
+OpenTelemetry tracing and metrics for Go MCP servers. One function call instruments every method in a [go-sdk](https://github.com/modelcontextprotocol/go-sdk) server, following the [OTel semantic conventions for MCP](https://opentelemetry.io/docs/specs/semconv/gen-ai/mcp/).
 
-The [go-sdk](https://github.com/modelcontextprotocol/go-sdk) silently converts tool handler errors into successful responses (`CallToolResult` with `IsError: true`). No logs, no metrics, no traces. A tool that crashes on every third call looks identical to one that works perfectly.
-
-This package fixes that. One function call gives you OpenTelemetry tracing and metrics for every MCP method, including the silent tool errors that the SDK hides from you.
+The go-sdk doesn't include observability out of the box, and existing OTel integrations for MCP ([MCPcat](https://github.com/MCPCat/mcp-cat), [Shinzo Labs](https://github.com/shinzo-labs/otel-mcp)) are TypeScript-only. This is the Go equivalent.
 
 ## Who is this for?
 
-You're building MCP servers in Go with the official go-sdk. You already have OTel infrastructure (Jaeger, Grafana Tempo, Prometheus, Datadog) and you want your MCP servers reporting into it. You shouldn't have to write custom instrumentation for every tool handler.
-
-If you're using TypeScript, check out [MCPcat](https://github.com/MCPCat/mcp-cat) or [Shinzo Labs](https://github.com/shinzo-labs/otel-mcp). This is the Go equivalent. Nothing else exists for Go today.
+You're building MCP servers in Go with the official go-sdk. You already have OTel infrastructure (Jaeger, Grafana Tempo, Prometheus, Datadog) and you want your MCP servers reporting into it. You shouldn't have to write custom instrumentation for every tool handler. Nothing else exists for Go today.
 
 ## Install
 
