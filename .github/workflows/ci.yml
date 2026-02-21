@@ -27,7 +27,11 @@ jobs:
         run: go build ./...
 
       - name: Test
-        run: go test -race -failfast -v -coverprofile=coverage.out ./...
+        run: go test -race -failfast -v ./...
+
+      - name: Coverage
+        if: matrix.go-version == '1.24'
+        run: go test -coverprofile=coverage.out ./mcpotel/
 
       - name: Upload coverage
         if: matrix.go-version == '1.24'
