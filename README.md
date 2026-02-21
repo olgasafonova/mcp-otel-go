@@ -3,6 +3,7 @@
 [![Go Report Card](https://goreportcard.com/badge/github.com/olgasafonova/mcp-otel-go)](https://goreportcard.com/report/github.com/olgasafonova/mcp-otel-go)
 [![CI](https://github.com/olgasafonova/mcp-otel-go/actions/workflows/ci.yml/badge.svg)](https://github.com/olgasafonova/mcp-otel-go/actions/workflows/ci.yml)
 [![Go Reference](https://pkg.go.dev/badge/github.com/olgasafonova/mcp-otel-go/mcpotel.svg)](https://pkg.go.dev/github.com/olgasafonova/mcp-otel-go/mcpotel)
+[![codecov](https://codecov.io/gh/olgasafonova/mcp-otel-go/branch/main/graph/badge.svg)](https://codecov.io/gh/olgasafonova/mcp-otel-go)
 
 OpenTelemetry (OTel) tracing and metrics for Go MCP servers. One function call instruments every method in a [go-sdk](https://github.com/modelcontextprotocol/go-sdk) server, following the [OTel semantic conventions for MCP](https://opentelemetry.io/docs/specs/semconv/gen-ai/mcp/).
 
