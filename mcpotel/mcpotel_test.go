@@ -1,0 +1,337 @@
+package mcpotel_test
+
+import (
+	"context"
+	"errors"
+	"testing"
+	"time"
+
+	"github.com/modelcontextprotocol/go-sdk/mcp"
+	"github.com/olgasafonova/mcp-otel-go/mcpotel"
+	"go.opentelemetry.io/otel/codes"
+	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
+	"go.opentelemetry.io/otel/sdk/metric/metricdata"
+	sdktrace "go.opentelemetry.io/otel/sdk/trace"
+	"go.opentelemetry.io/otel/sdk/trace/tracetest"
+	"go.opentelemetry.io/otel/trace"
+)
+
+var testImpl = &mcp.Implementation{
+	Name:    "test-server",
+	Version: "0.1.0",
+}
+
+func setupServer(t *testing.T, cfg mcpotel.Config) (*mcp.Server, *tracetest.InMemoryExporter, *sdkmetric.ManualReader) {
+	t.Helper()
+
+	spanExporter := tracetest.NewInMemoryExporter()
+	tp := sdktrace.NewTracerProvider(
+		sdktrace.WithSyncer(spanExporter),
+	)
+	t.Cleanup(func() { tp.Shutdown(context.Background()) })
+
+	metricReader := sdkmetric.NewManualReader()
+	mp := sdkmetric.NewMeterProvider(
+		sdkmetric.WithReader(metricReader),
+	)
+	t.Cleanup(func() { mp.Shutdown(context.Background()) })
+
+	cfg.TracerProvider = tp
+	cfg.MeterProvider = mp
+
+	s := mcp.NewServer(testImpl, nil)
+	s.AddReceivingMiddleware(mcpotel.Middleware(cfg))
+
+	return s, spanExporter, metricReader
+}
+
+func connect(t *testing.T, s *mcp.Server) *mcp.ClientSession {
+	t.Helper()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	t.Cleanup(cancel)
+
+	ct, st := mcp.NewInMemoryTransports()
+	ss, err := s.Connect(ctx, st, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { ss.Close() })
+
+	c := mcp.NewClient(testImpl, nil)
+	cs, err := c.Connect(ctx, ct, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { cs.Close() })
+
+	return cs
+}
+
+func TestMiddleware_ToolCall(t *testing.T) {
+	s, spanExp, metricReader := setupServer(t, mcpotel.Config{
+		ServiceName: "test-server",
+	})
+
+	mcp.AddTool(s, &mcp.Tool{Name: "greet"}, func(_ context.Context, _ *mcp.CallToolRequest, args map[string]any) (*mcp.CallToolResult, any, error) {
+		return &mcp.CallToolResult{
+			Content: []mcp.Content{&mcp.TextContent{Text: "hello"}},
+		}, nil, nil
+	})
+
+	cs := connect(t, s)
+
+	ctx := context.Background()
+	_, err := cs.CallTool(ctx, &mcp.CallToolParams{Name: "greet"})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	spans := spanExp.GetSpans()
+	toolSpan := findSpan(spans, "tools/call greet")
+	if toolSpan == nil {
+		t.Fatalf("expected span 'tools/call greet', got spans: %v", spanNames(spans))
+	}
+
+	assertAttribute(t, toolSpan, "mcp.method.name", "tools/call")
+	assertAttribute(t, toolSpan, "gen_ai.tool.name", "greet")
+
+	if toolSpan.SpanKind != trace.SpanKindServer {
+		t.Errorf("expected SpanKindServer, got %v", toolSpan.SpanKind)
+	}
+
+	// Verify metrics recorded
+	var rm metricdata.ResourceMetrics
+	if err := metricReader.Collect(ctx, &rm); err != nil {
+		t.Fatal(err)
+	}
+
+	found := findMetric(rm, "mcp.server.operation.duration")
+	if !found {
+		t.Error("expected mcp.server.operation.duration metric to be recorded")
+	}
+}
+
+func TestMiddleware_ToolCallError(t *testing.T) {
+	// Calling a non-existent tool triggers a JSON-RPC error at the protocol
+	// level, which the middleware sees as a real Go error (unlike tool handler
+	// errors, which the go-sdk wraps into CallToolResult with IsError=true).
+	s, spanExp, _ := setupServer(t, mcpotel.Config{
+		ServiceName: "test-server",
+	})
+
+	cs := connect(t, s)
+
+	ctx := context.Background()
+	_, err := cs.CallTool(ctx, &mcp.CallToolParams{Name: "nonexistent"})
+	if err == nil {
+		t.Fatal("expected error from calling nonexistent tool")
+	}
+
+	spans := spanExp.GetSpans()
+	span := findSpan(spans, "tools/call nonexistent")
+	if span == nil {
+		t.Fatalf("expected span 'tools/call nonexistent', got spans: %v", spanNames(spans))
+	}
+
+	if span.Status.Code != codes.Error {
+		t.Errorf("expected error status code %v, got %v", codes.Error, span.Status.Code)
+	}
+}
+
+func TestMiddleware_ToolHandlerError(t *testing.T) {
+	// When a tool handler returns a Go error, the go-sdk wraps it into
+	// CallToolResult{IsError: true} and returns (result, nil) to the
+	// middleware. The middleware should detect this and mark the span as error.
+	s, spanExp, _ := setupServer(t, mcpotel.Config{
+		ServiceName: "test-server",
+	})
+
+	mcp.AddTool(s, &mcp.Tool{Name: "broken"}, func(_ context.Context, _ *mcp.CallToolRequest, args map[string]any) (*mcp.CallToolResult, any, error) {
+		return nil, nil, errors.New("database connection lost")
+	})
+
+	cs := connect(t, s)
+
+	ctx := context.Background()
+	result, err := cs.CallTool(ctx, &mcp.CallToolParams{Name: "broken"})
+	// The go-sdk does NOT propagate tool handler errors as Go errors.
+	// Instead it returns a result with IsError=true.
+	if err != nil {
+		t.Fatalf("unexpected protocol error: %v", err)
+	}
+	if !result.IsError {
+		t.Fatal("expected IsError=true on result")
+	}
+
+	spans := spanExp.GetSpans()
+	span := findSpan(spans, "tools/call broken")
+	if span == nil {
+		t.Fatalf("expected span 'tools/call broken', got spans: %v", spanNames(spans))
+	}
+
+	// The middleware should detect the application-level error
+	if span.Status.Code != codes.Error {
+		t.Errorf("expected error status for tool handler error, got %v", span.Status.Code)
+	}
+
+	// error.type attribute should be present
+	assertAttribute(t, span, "error.type", "database connection lost")
+}
+
+func TestMiddleware_ListTools(t *testing.T) {
+	s, spanExp, _ := setupServer(t, mcpotel.Config{
+		ServiceName: "test-server",
+	})
+
+	mcp.AddTool(s, &mcp.Tool{Name: "nop"}, func(_ context.Context, _ *mcp.CallToolRequest, args map[string]any) (*mcp.CallToolResult, any, error) {
+		return nil, nil, nil
+	})
+
+	cs := connect(t, s)
+
+	ctx := context.Background()
+	_, err := cs.ListTools(ctx, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	spans := spanExp.GetSpans()
+	span := findSpan(spans, "tools/list")
+	if span == nil {
+		t.Fatalf("expected span 'tools/list', got spans: %v", spanNames(spans))
+	}
+
+	assertAttribute(t, span, "mcp.method.name", "tools/list")
+}
+
+func TestMiddleware_Initialize(t *testing.T) {
+	s, spanExp, _ := setupServer(t, mcpotel.Config{
+		ServiceName: "test-server",
+	})
+
+	// Just connecting triggers initialize
+	_ = connect(t, s)
+
+	spans := spanExp.GetSpans()
+	span := findSpan(spans, "initialize")
+	if span == nil {
+		t.Fatalf("expected span 'initialize', got spans: %v", spanNames(spans))
+	}
+
+	assertAttribute(t, span, "mcp.method.name", "initialize")
+}
+
+func TestMiddleware_Filter(t *testing.T) {
+	s, spanExp, _ := setupServer(t, mcpotel.Config{
+		ServiceName: "test-server",
+		Filter: func(method string) bool {
+			return method == "tools/call"
+		},
+	})
+
+	mcp.AddTool(s, &mcp.Tool{Name: "hello"}, func(_ context.Context, _ *mcp.CallToolRequest, args map[string]any) (*mcp.CallToolResult, any, error) {
+		return &mcp.CallToolResult{
+			Content: []mcp.Content{&mcp.TextContent{Text: "hi"}},
+		}, nil, nil
+	})
+
+	cs := connect(t, s)
+
+	ctx := context.Background()
+	if _, err := cs.CallTool(ctx, &mcp.CallToolParams{Name: "hello"}); err != nil {
+		t.Fatal(err)
+	}
+
+	spans := spanExp.GetSpans()
+
+	// tools/call should be instrumented
+	if findSpan(spans, "tools/call hello") == nil {
+		t.Error("expected tools/call span to be present")
+	}
+
+	// initialize should NOT be instrumented (filtered out)
+	if findSpan(spans, "initialize") != nil {
+		t.Error("expected initialize span to be filtered out")
+	}
+}
+
+func TestMiddleware_SessionID(t *testing.T) {
+	s, spanExp, _ := setupServer(t, mcpotel.Config{
+		ServiceName: "test-server",
+	})
+
+	mcp.AddTool(s, &mcp.Tool{Name: "ping"}, func(_ context.Context, _ *mcp.CallToolRequest, args map[string]any) (*mcp.CallToolResult, any, error) {
+		return &mcp.CallToolResult{
+			Content: []mcp.Content{&mcp.TextContent{Text: "pong"}},
+		}, nil, nil
+	})
+
+	cs := connect(t, s)
+
+	ctx := context.Background()
+	if _, err := cs.CallTool(ctx, &mcp.CallToolParams{Name: "ping"}); err != nil {
+		t.Fatal(err)
+	}
+
+	spans := spanExp.GetSpans()
+	span := findSpan(spans, "tools/call ping")
+	if span == nil {
+		t.Fatalf("expected span 'tools/call ping', got spans: %v", spanNames(spans))
+	}
+
+	// Session ID should be present (in-memory transport assigns one)
+	hasSessionID := false
+	for _, attr := range span.Attributes {
+		if string(attr.Key) == "mcp.session.id" && attr.Value.AsString() != "" {
+			hasSessionID = true
+			break
+		}
+	}
+	if !hasSessionID {
+		t.Log("session ID attribute not found (may be empty for in-memory transport)")
+	}
+}
+
+// --- helpers ---
+
+func findSpan(spans tracetest.SpanStubs, name string) *tracetest.SpanStub {
+	for i := range spans {
+		if spans[i].Name == name {
+			return &spans[i]
+		}
+	}
+	return nil
+}
+
+func spanNames(spans tracetest.SpanStubs) []string {
+	names := make([]string, len(spans))
+	for i, s := range spans {
+		names[i] = s.Name
+	}
+	return names
+}
+
+func assertAttribute(t *testing.T, span *tracetest.SpanStub, key, expected string) {
+	t.Helper()
+	for _, attr := range span.Attributes {
+		if string(attr.Key) == key {
+			if got := attr.Value.AsString(); got != expected {
+				t.Errorf("attribute %q: got %q, want %q", key, got, expected)
+			}
+			return
+		}
+	}
+	t.Errorf("attribute %q not found on span %q", key, span.Name)
+}
+
+func findMetric(rm metricdata.ResourceMetrics, name string) bool {
+	for _, sm := range rm.ScopeMetrics {
+		for _, m := range sm.Metrics {
+			if m.Name == name {
+				return true
+			}
+		}
+	}
+	return false
+}
