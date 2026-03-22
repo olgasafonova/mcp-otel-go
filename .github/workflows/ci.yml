@@ -15,7 +15,7 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        go-version: ['1.24']
+        go-version: ['1.25']
     steps:
       - uses: actions/checkout@v6
 
@@ -30,11 +30,11 @@ jobs:
         run: go test -race -failfast -v ./...
 
       - name: Coverage
-        if: matrix.go-version == '1.24'
+        if: matrix.go-version == '1.25'
         run: go test -coverprofile=coverage.out ./mcpotel/
 
       - name: Upload coverage
-        if: matrix.go-version == '1.24'
+        if: matrix.go-version == '1.25'
         uses: codecov/codecov-action@v5
         with:
           files: coverage.out
@@ -47,7 +47,7 @@ jobs:
 
       - uses: actions/setup-go@v6
         with:
-          go-version: '1.24'
+          go-version: '1.25'
 
       - name: golangci-lint
         uses: golangci/golangci-lint-action@v9
