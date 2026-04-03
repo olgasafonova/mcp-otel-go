@@ -1,0 +1,7 @@
+{
+  "database": "dolt",
+  "backend": "dolt",
+  "dolt_mode": "embedded",
+  "dolt_database": "mcp_otel_go",
+  "project_id": "9f76c4f6-8e4a-433c-8cc1-ba53a622a672"
+}
