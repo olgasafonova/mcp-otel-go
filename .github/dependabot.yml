@@ -6,6 +6,10 @@ updates:
       interval: weekly
     commit-message:
       prefix: deps
+    groups:
+      go-dependencies:
+        patterns:
+          - "*"
   - package-ecosystem: github-actions
     directory: /
     schedule:
