@@ -3,6 +3,7 @@ package mcpotel
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"net/url"
 	"time"
 
@@ -95,7 +96,15 @@ func resolve(cfg Config) resolved {
 	m, err := newMeters(mp)
 	if err != nil {
 		// Metric registration should not fail in practice. If it does, the
-		// middleware still works — it just won't record metrics.
+		// middleware still works (spans continue to be recorded), but the
+		// duration histogram will be silently absent from the metric
+		// pipeline. Surface the failure so operators notice before the
+		// dashboard goes empty.
+		slog.Error(
+			"mcpotel: metric registration failed; continuing without metrics",
+			"err", err,
+			"service", cfg.ServiceName,
+		)
 		m = nil
 	}
 
