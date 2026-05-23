@@ -233,3 +233,60 @@ func URISchemeOnly(uri string) string {
 func URIFull(uri string) string {
 	return uri
 }
+
+// --- Built-in filters ---
+
+// defaultProtocolChatterMethods enumerates the MCP protocol housekeeping
+// methods that DefaultProtocolFilter drops. Keep this list narrow: each
+// addition silently removes signal from telemetry, which is harder to debug
+// than the noise it removes.
+var defaultProtocolChatterMethods = map[string]struct{}{
+	"notifications/initialized":        {},
+	"notifications/cancelled":          {},
+	"notifications/progress":           {},
+	"notifications/roots/list_changed": {},
+	"ping":                             {},
+	"tools/list":                       {},
+	"resources/list":                   {},
+	"resources/templates/list":         {},
+	"prompts/list":                     {},
+}
+
+// DefaultProtocolFilter returns false for MCP protocol housekeeping methods
+// that tend to dominate telemetry without carrying diagnostic value. It
+// returns true for everything else, including tools/call, resources/read,
+// prompts/get, and initialize.
+//
+// Pass it to Config.Filter to reduce metric cardinality and span volume on
+// high-traffic servers:
+//
+//	mcpotel.Middleware(mcpotel.Config{
+//	    ServiceName: "my-server",
+//	    Filter:      mcpotel.DefaultProtocolFilter,
+//	})
+//
+// Currently filtered methods:
+//
+//	notifications/initialized
+//	notifications/cancelled
+//	notifications/progress
+//	notifications/roots/list_changed
+//	ping
+//	tools/list
+//	resources/list
+//	resources/templates/list
+//	prompts/list
+//
+// This list is intentionally conservative. To filter additional methods,
+// compose your own filter:
+//
+//	Filter: func(method string) bool {
+//	    if !mcpotel.DefaultProtocolFilter(method) {
+//	        return false
+//	    }
+//	    return method != "initialize" // also drop initialize
+//	}
+func DefaultProtocolFilter(method string) bool {
+	_, chatter := defaultProtocolChatterMethods[method]
+	return !chatter
+}

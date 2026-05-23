@@ -164,16 +164,34 @@ type Config struct {
 
 ### Filtering methods
 
-Skip instrumentation for noisy methods:
+By default, every MCP method is instrumented, including protocol housekeeping like `notifications/initialized`, `ping`, and `tools/list`. On high-traffic servers this can dominate telemetry without carrying diagnostic value.
+
+Use the built-in `DefaultProtocolFilter` to drop the well-known chatter while keeping `tools/call`, `resources/read`, `prompts/get`, and `initialize`:
+
+```go
+mcpotel.Middleware(mcpotel.Config{
+    ServiceName: "my-server",
+    Filter:      mcpotel.DefaultProtocolFilter,
+})
+```
+
+`DefaultProtocolFilter` currently drops: `notifications/initialized`, `notifications/cancelled`, `notifications/progress`, `notifications/roots/list_changed`, `ping`, `tools/list`, `resources/list`, `resources/templates/list`, `prompts/list`.
+
+Or compose your own:
 
 ```go
 mcpotel.Middleware(mcpotel.Config{
     ServiceName: "my-server",
     Filter: func(method string) bool {
-        return method != "notifications/initialized"
+        if !mcpotel.DefaultProtocolFilter(method) {
+            return false
+        }
+        return method != "initialize" // also drop initialize
     },
 })
 ```
+
+`DefaultProtocolFilter` is not the default `Filter`. The default (`nil`) is to instrument everything, so existing setups keep recording the same methods they always did. Opt in when you decide the noise outweighs the signal.
 
 ## Bring your own exporter
 

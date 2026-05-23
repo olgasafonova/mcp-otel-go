@@ -613,6 +613,73 @@ func BenchmarkMiddleware_ToolCall(b *testing.B) {
 	}
 }
 
+func TestDefaultProtocolFilter_DropsChatterKeepsWork(t *testing.T) {
+	dropped := []string{
+		"notifications/initialized",
+		"notifications/cancelled",
+		"notifications/progress",
+		"notifications/roots/list_changed",
+		"ping",
+		"tools/list",
+		"resources/list",
+		"resources/templates/list",
+		"prompts/list",
+	}
+	for _, method := range dropped {
+		if mcpotel.DefaultProtocolFilter(method) {
+			t.Errorf("DefaultProtocolFilter(%q) = true, want false (should be dropped)", method)
+		}
+	}
+
+	kept := []string{
+		"tools/call",
+		"resources/read",
+		"prompts/get",
+		"initialize",
+		"completion/complete",
+		"sampling/createMessage",
+		"some/unknown/method",
+	}
+	for _, method := range kept {
+		if !mcpotel.DefaultProtocolFilter(method) {
+			t.Errorf("DefaultProtocolFilter(%q) = false, want true (should be kept)", method)
+		}
+	}
+}
+
+func TestMiddleware_WithDefaultProtocolFilter(t *testing.T) {
+	// Wire DefaultProtocolFilter through the middleware and confirm that
+	// tools/list (chatter) is dropped while tools/call (work) is kept.
+	s, spanExp, _ := setupServer(t, mcpotel.Config{
+		ServiceName: "test-server",
+		Filter:      mcpotel.DefaultProtocolFilter,
+	})
+
+	mcp.AddTool(s, &mcp.Tool{Name: "work"}, func(_ context.Context, _ *mcp.CallToolRequest, args map[string]any) (*mcp.CallToolResult, any, error) {
+		return &mcp.CallToolResult{
+			Content: []mcp.Content{&mcp.TextContent{Text: "ok"}},
+		}, nil, nil
+	})
+
+	cs := connect(t, s)
+
+	ctx := context.Background()
+	if _, err := cs.ListTools(ctx, nil); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := cs.CallTool(ctx, &mcp.CallToolParams{Name: "work"}); err != nil {
+		t.Fatal(err)
+	}
+
+	spans := spanExp.GetSpans()
+	if findSpan(spans, "tools/list") != nil {
+		t.Error("expected tools/list span to be filtered out, but it was recorded")
+	}
+	if findSpan(spans, "tools/call work") == nil {
+		t.Errorf("expected tools/call work span to be present, got: %v", spanNames(spans))
+	}
+}
+
 // --- meter-failure test ---
 
 // failingMeterProvider returns a Meter whose Float64Histogram always errors.
