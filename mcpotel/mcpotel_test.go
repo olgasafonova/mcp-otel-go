@@ -357,6 +357,8 @@ func TestMiddleware_SessionID(t *testing.T) {
 }
 
 func TestMiddleware_ResourceRead(t *testing.T) {
+	// Default RedactURI is URISchemeOnly: only the scheme is recorded, not
+	// the full path. This is the privacy-safe default.
 	s, spanExp, _ := setupServer(t, mcpotel.Config{
 		ServiceName: "test-server",
 	})
@@ -381,12 +383,50 @@ func TestMiddleware_ResourceRead(t *testing.T) {
 	}
 
 	spans := spanExp.GetSpans()
-	span := findSpan(spans, "resources/read test://greetings/hello")
+	// Default behavior: URI is scheme-only.
+	span := findSpan(spans, "resources/read test://")
 	if span == nil {
-		t.Fatalf("expected span 'resources/read test://greetings/hello', got spans: %v", spanNames(spans))
+		t.Fatalf("expected span 'resources/read test://' (scheme-only by default), got spans: %v", spanNames(spans))
 	}
 
 	assertAttribute(t, span, "mcp.method.name", "resources/read")
+	assertAttribute(t, span, "mcp.resource.uri", "test://")
+}
+
+func TestMiddleware_ResourceReadWithURIFull(t *testing.T) {
+	// Opt-in to full URIs by setting RedactURI: URIFull. Use this only when
+	// you control the URI namespace and are confident the paths contain no
+	// user-identifiable data.
+	s, spanExp, _ := setupServer(t, mcpotel.Config{
+		ServiceName: "test-server",
+		RedactURI:   mcpotel.URIFull,
+	})
+
+	s.AddResource(&mcp.Resource{
+		Name: "greeting",
+		URI:  "test://greetings/hello",
+	}, func(_ context.Context, _ *mcp.ReadResourceRequest) (*mcp.ReadResourceResult, error) {
+		return &mcp.ReadResourceResult{
+			Contents: []*mcp.ResourceContents{
+				{URI: "test://greetings/hello", Text: "Hello, world!"},
+			},
+		}, nil
+	})
+
+	cs := connect(t, s)
+
+	ctx := context.Background()
+	_, err := cs.ReadResource(ctx, &mcp.ReadResourceParams{URI: "test://greetings/hello"})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	spans := spanExp.GetSpans()
+	span := findSpan(spans, "resources/read test://greetings/hello")
+	if span == nil {
+		t.Fatalf("expected span 'resources/read test://greetings/hello' (URIFull), got spans: %v", spanNames(spans))
+	}
+
 	assertAttribute(t, span, "mcp.resource.uri", "test://greetings/hello")
 }
 
@@ -510,7 +550,7 @@ func ExampleMiddleware_withRedaction() {
 	server.AddReceivingMiddleware(mcpotel.Middleware(mcpotel.Config{
 		ServiceName: "my-server",
 		RedactError: mcpotel.ErrorMessageFull, // opt-in to full error messages
-		RedactURI:   mcpotel.URISchemeOnly,    // strip paths from resource URIs
+		RedactURI:   mcpotel.URIFull,          // opt-in to full URI paths
 	}))
 }
 

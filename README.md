@@ -48,7 +48,7 @@ This middleware catches both. It inspects `CallToolResult.IsError` after every `
 | Span per method call | `tools/call miro_create_sticky` |
 | Method name | `mcp.method.name = "tools/call"` |
 | Tool name | `gen_ai.tool.name = "miro_create_sticky"` |
-| Resource URI | `mcp.resource.uri = "miro://board/123"` |
+| Resource URI scheme | `mcp.resource.uri = "miro://"` (scheme-only by default; opt in to full URIs with `RedactURI: mcpotel.URIFull`) |
 | Prompt name | `gen_ai.prompt.name = "summarize"` |
 | Session ID | `mcp.session.id = "abc123"` |
 | Error type (both surfaces) | `error.type = "*errors.errorString"` |
@@ -65,8 +65,9 @@ Privacy-safe by default. The middleware never records:
 - Environment variables or file paths
 - IP addresses or user-identifiable information
 - Full error messages (only Go type names like `*json.SyntaxError`, not the message text)
+- Full resource URI paths (only the scheme, e.g., `file://` not `file:///home/john/secret.txt`)
 
-Only method names, tool names, timing, error type names, and session IDs. Resource URIs are recorded by default but can be redacted (see below).
+Only method names, tool names, timing, error type names, session IDs, and URI schemes.
 
 ## Privacy controls
 
@@ -104,14 +105,35 @@ mcpotel.Middleware(mcpotel.Config{
 })
 ```
 
-### URI redaction (opt-in)
+### URI redaction (on by default)
 
-Resource URIs are recorded in full by default. If your URIs contain user-identifiable paths, enable scheme-only recording:
+By default, only the URI scheme is recorded (e.g., `file://`, `miro://`), not the full path. This is safe because URI schemes are server-defined and never contain user data.
+
+```go
+// Default behavior: records "file://", not "file:///home/john/secret.txt"
+mcpotel.Middleware(mcpotel.Config{
+    ServiceName: "my-server",
+})
+```
+
+Opt in to full URIs only when you control the URI namespace and the paths contain no PII (e.g., opaque IDs from your own system):
 
 ```go
 mcpotel.Middleware(mcpotel.Config{
     ServiceName: "my-server",
-    RedactURI:   mcpotel.URISchemeOnly, // "file:///home/john/secret.txt" → "file://"
+    RedactURI:   mcpotel.URIFull, // record complete URI verbatim
+})
+```
+
+Or provide your own redactor:
+
+```go
+mcpotel.Middleware(mcpotel.Config{
+    ServiceName: "my-server",
+    RedactURI: func(uri string) string {
+        // Hash, classify, or strip per-component
+        return classifyURI(uri)
+    },
 })
 ```
 
@@ -136,7 +158,7 @@ type Config struct {
     MeterProvider  metric.MeterProvider      // Optional. Defaults to otel.GetMeterProvider()
     Filter         func(method string) bool  // Optional. Return false to skip a method
     RedactError    func(err error) string    // Optional. Defaults to Go type name only
-    RedactURI      func(uri string) string   // Optional. Nil = full URI recorded
+    RedactURI      func(uri string) string   // Optional. Defaults to URISchemeOnly
 }
 ```
 

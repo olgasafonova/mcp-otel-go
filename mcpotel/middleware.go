@@ -46,8 +46,13 @@ type Config struct {
 	// RedactURI controls how resource URIs are recorded in spans and metrics.
 	// URIs may contain user-identifiable paths or query parameters.
 	//
-	// When nil, defaults to recording the full URI. Set to URISchemeOnly
-	// to record only the scheme (e.g., "file://", "user://").
+	// When nil, defaults to URISchemeOnly: only the scheme is recorded
+	// (e.g., "file://", "user://"). This is the privacy-safe default and
+	// keeps the library's posture consistent with RedactError.
+	//
+	// To record full URIs verbatim, set this explicitly to URIFull. Only do
+	// this when you control the URI namespace and are confident the paths
+	// contain no user-identifiable data.
 	RedactURI func(uri string) string
 }
 
@@ -77,6 +82,11 @@ func resolve(cfg Config) resolved {
 		redactErr = errorTypeName
 	}
 
+	redactURI := cfg.RedactURI
+	if redactURI == nil {
+		redactURI = URISchemeOnly
+	}
+
 	tracer := tp.Tracer(
 		instrumentationName,
 		trace.WithInstrumentationVersion("0.1.0"),
@@ -93,7 +103,7 @@ func resolve(cfg Config) resolved {
 		tracer:    tracer,
 		meters:    m,
 		redactErr: redactErr,
-		redactURI: cfg.RedactURI,
+		redactURI: redactURI,
 		filter:    cfg.Filter,
 	}
 }
@@ -127,9 +137,10 @@ func Middleware(cfg Config) mcp.Middleware {
 
 			target := extractTarget(method, req)
 
-			// Apply URI redaction for resource reads.
+			// Apply URI redaction for resource reads. r.redactURI is never nil:
+			// resolve() defaults it to URISchemeOnly.
 			displayTarget := target
-			if method == "resources/read" && r.redactURI != nil && target != "" {
+			if method == "resources/read" && target != "" {
 				displayTarget = r.redactURI(target)
 			}
 
@@ -196,10 +207,20 @@ func errorTypeName(err error) string {
 }
 
 // URISchemeOnly records only the URI scheme (e.g., "file://", "miro://").
-// Use this when resource URIs may contain user-identifiable paths.
+// This is the default RedactURI behavior. Use it explicitly to document intent.
 func URISchemeOnly(uri string) string {
 	if u, err := url.Parse(uri); err == nil && u.Scheme != "" {
 		return u.Scheme + "://"
 	}
 	return "unknown://"
+}
+
+// URIFull records the complete URI verbatim. Use this only when you control
+// the URI namespace and are confident the paths contain no PII (e.g., opaque
+// IDs from your own system).
+//
+// Setting RedactURI: URIFull is the explicit opt-out from the privacy-safe
+// default (URISchemeOnly).
+func URIFull(uri string) string {
+	return uri
 }
