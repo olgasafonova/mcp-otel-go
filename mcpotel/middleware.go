@@ -12,6 +12,7 @@ import (
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/codes"
 	"go.opentelemetry.io/otel/metric"
+	"go.opentelemetry.io/otel/propagation"
 	"go.opentelemetry.io/otel/trace"
 )
 
@@ -55,16 +56,30 @@ type Config struct {
 	// this when you control the URI namespace and are confident the paths
 	// contain no user-identifiable data.
 	RedactURI func(uri string) string
+
+	// Propagator extracts inbound trace context from the request's `_meta`,
+	// linking this server's spans to the caller's trace. Defaults to
+	// otel.GetTextMapPropagator().
+	//
+	// MCP revision 2026-07-28 documents the OpenTelemetry convention for
+	// `_meta` (SEP-414) using the unprefixed W3C key names `traceparent`,
+	// `tracestate` and `baggage`, which is exactly what the standard
+	// propagators read. Note that the OTel global default is a NO-OP
+	// propagator: an application that never calls otel.SetTextMapPropagator
+	// gets no propagation, here or anywhere else in its stack. Set one, or set
+	// this field, to opt in.
+	Propagator propagation.TextMapPropagator
 }
 
 // resolved holds the immutable, pre-computed state for the middleware.
 // Created once during Middleware() and captured by the closure.
 type resolved struct {
-	tracer    trace.Tracer
-	meters    *meters
-	redactErr func(error) string
-	redactURI func(string) string
-	filter    func(string) bool
+	tracer     trace.Tracer
+	meters     *meters
+	redactErr  func(error) string
+	redactURI  func(string) string
+	filter     func(string) bool
+	propagator propagation.TextMapPropagator
 }
 
 func resolve(cfg Config) resolved {
@@ -88,6 +103,11 @@ func resolve(cfg Config) resolved {
 		redactURI = URISchemeOnly
 	}
 
+	propagator := cfg.Propagator
+	if propagator == nil {
+		propagator = otel.GetTextMapPropagator()
+	}
+
 	tracer := tp.Tracer(
 		instrumentationName,
 		trace.WithInstrumentationVersion("0.1.0"),
@@ -109,11 +129,12 @@ func resolve(cfg Config) resolved {
 	}
 
 	return resolved{
-		tracer:    tracer,
-		meters:    m,
-		redactErr: redactErr,
-		redactURI: redactURI,
-		filter:    cfg.Filter,
+		tracer:     tracer,
+		meters:     m,
+		redactErr:  redactErr,
+		redactURI:  redactURI,
+		filter:     cfg.Filter,
+		propagator: propagator,
 	}
 }
 
@@ -166,6 +187,16 @@ func Middleware(cfg Config) mcp.Middleware {
 			}
 
 			appendTargetAttrs(&attrs, method, displayTarget)
+
+			// SEP-414: link this span to the caller's trace by extracting W3C
+			// trace context from the request's `_meta` BEFORE starting the
+			// span. Extracting afterwards would produce a root span and lose
+			// the parent link, which is the whole point of propagation.
+			//
+			// Extract against a request with no `_meta` is a no-op that
+			// returns ctx unchanged, so an uninstrumented caller still gets a
+			// normal root span here.
+			ctx = r.propagator.Extract(ctx, carrierFor(req))
 
 			ctx, span := r.tracer.Start(ctx, name,
 				trace.WithSpanKind(trace.SpanKindServer),
