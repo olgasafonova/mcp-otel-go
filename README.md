@@ -56,6 +56,37 @@ This middleware catches both. It inspects `CallToolResult.IsError` after every `
 
 All attribute names follow the [OTel semantic conventions for MCP](https://opentelemetry.io/docs/specs/semconv/gen-ai/mcp/).
 
+## Distributed tracing across the MCP boundary
+
+Spans emitted here join the caller's trace when the request carries W3C trace
+context. MCP revision `2026-07-28` documents the convention (SEP-414): the
+context travels in the request's `_meta` under the **unprefixed** W3C key names
+`traceparent`, `tracestate` and `baggage`. They carry no
+`io.modelcontextprotocol/` namespace, unlike `protocolVersion` or `clientInfo`,
+which is what lets the standard OTel propagators read them with no translation
+layer.
+
+The middleware extracts that context before it starts its span, so the span
+becomes a child of the caller's span rather than a new root.
+
+**One gotcha, and it is the reason this can silently do nothing.** OTel's global
+default is a **no-op** propagator. An application that never calls
+`otel.SetTextMapPropagator` gets no propagation anywhere in its stack, including
+here. Opt in explicitly, either globally:
+
+```go
+otel.SetTextMapPropagator(propagation.NewCompositeTextMapPropagator(
+    propagation.TraceContext{},
+    propagation.Baggage{},
+))
+```
+
+or per-middleware via `Config.Propagator`.
+
+A request with no trace context still produces a normal root span, and a
+malformed or non-string `traceparent` degrades to a root span rather than
+failing the request.
+
 ## What does NOT get collected
 
 Privacy-safe by default. The middleware never records:
@@ -159,6 +190,7 @@ type Config struct {
     Filter         func(method string) bool  // Optional. Return false to skip a method
     RedactError    func(err error) string    // Optional. Defaults to Go type name only
     RedactURI      func(uri string) string   // Optional. Defaults to URISchemeOnly
+    Propagator     propagation.TextMapPropagator // Optional. Defaults to otel.GetTextMapPropagator()
 }
 ```
 
