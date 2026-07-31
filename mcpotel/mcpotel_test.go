@@ -273,21 +273,26 @@ func TestMiddleware_ListTools(t *testing.T) {
 	assertAttribute(t, span, "mcp.method.name", "tools/list")
 }
 
-func TestMiddleware_Initialize(t *testing.T) {
+// TestMiddleware_Discover covers the connection-time protocol call. Protocol
+// revision 2026-07-28 removed the initialize handshake and replaced it with the
+// server/discover RPC (SEP-2575), so connecting now emits a server/discover
+// span where it previously emitted initialize. The behaviour under test is
+// unchanged: the middleware instruments whatever the connection triggers.
+func TestMiddleware_Discover(t *testing.T) {
 	s, spanExp, _ := setupServer(t, mcpotel.Config{
 		ServiceName: "test-server",
 	})
 
-	// Just connecting triggers initialize
+	// Just connecting triggers server/discover
 	_ = connect(t, s)
 
 	spans := spanExp.GetSpans()
-	span := findSpan(spans, "initialize")
+	span := findSpan(spans, "server/discover")
 	if span == nil {
-		t.Fatalf("expected span 'initialize', got spans: %v", spanNames(spans))
+		t.Fatalf("expected span 'server/discover', got spans: %v", spanNames(spans))
 	}
 
-	assertAttribute(t, span, "mcp.method.name", "initialize")
+	assertAttribute(t, span, "mcp.method.name", "server/discover")
 }
 
 func TestMiddleware_Filter(t *testing.T) {
@@ -318,9 +323,10 @@ func TestMiddleware_Filter(t *testing.T) {
 		t.Error("expected tools/call span to be present")
 	}
 
-	// initialize should NOT be instrumented (filtered out)
-	if findSpan(spans, "initialize") != nil {
-		t.Error("expected initialize span to be filtered out")
+	// server/discover should NOT be instrumented (filtered out). It replaced
+	// initialize as the connection-time call in protocol revision 2026-07-28.
+	if findSpan(spans, "server/discover") != nil {
+		t.Error("expected server/discover span to be filtered out")
 	}
 }
 
@@ -635,7 +641,7 @@ func TestDefaultProtocolFilter_DropsChatterKeepsWork(t *testing.T) {
 		"tools/call",
 		"resources/read",
 		"prompts/get",
-		"initialize",
+		"server/discover",
 		"completion/complete",
 		"sampling/createMessage",
 		"some/unknown/method",

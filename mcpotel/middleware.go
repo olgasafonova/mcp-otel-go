@@ -255,7 +255,13 @@ var defaultProtocolChatterMethods = map[string]struct{}{
 // DefaultProtocolFilter returns false for MCP protocol housekeeping methods
 // that tend to dominate telemetry without carrying diagnostic value. It
 // returns true for everything else, including tools/call, resources/read,
-// prompts/get, and initialize.
+// prompts/get, and server/discover.
+//
+// ping stays in the drop list even though protocol revision 2026-07-28 removed
+// the method: the SDK negotiates versions, so an older client can still send
+// one. server/discover is deliberately NOT dropped. It replaced initialize as
+// the connection-time call, and connection establishment is diagnostic signal
+// rather than chatter.
 //
 // Pass it to Config.Filter to reduce metric cardinality and span volume on
 // high-traffic servers:
@@ -284,7 +290,7 @@ var defaultProtocolChatterMethods = map[string]struct{}{
 //	    if !mcpotel.DefaultProtocolFilter(method) {
 //	        return false
 //	    }
-//	    return method != "initialize" // also drop initialize
+//	    return method != "server/discover" // also drop the discovery call
 //	}
 func DefaultProtocolFilter(method string) bool {
 	_, chatter := defaultProtocolChatterMethods[method]

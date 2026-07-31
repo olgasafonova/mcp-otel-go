@@ -166,7 +166,7 @@ type Config struct {
 
 By default, every MCP method is instrumented, including protocol housekeeping like `notifications/initialized`, `ping`, and `tools/list`. On high-traffic servers this can dominate telemetry without carrying diagnostic value.
 
-Use the built-in `DefaultProtocolFilter` to drop the well-known chatter while keeping `tools/call`, `resources/read`, `prompts/get`, and `initialize`:
+Use the built-in `DefaultProtocolFilter` to drop the well-known chatter while keeping `tools/call`, `resources/read`, `prompts/get`, and `server/discover`:
 
 ```go
 mcpotel.Middleware(mcpotel.Config{
@@ -186,7 +186,7 @@ mcpotel.Middleware(mcpotel.Config{
         if !mcpotel.DefaultProtocolFilter(method) {
             return false
         }
-        return method != "initialize" // also drop initialize
+        return method != "server/discover" // also drop the discovery call
     },
 })
 ```
