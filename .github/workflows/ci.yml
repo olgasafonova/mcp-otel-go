@@ -54,5 +54,18 @@ jobs:
         with:
           version: latest
 
+      # Catches an // indirect drift before it reaches a consumer. This module
+      # is imported by the server repos, so an untidy go.mod here propagates.
+      # Lives in the lint job rather than test so it runs once, not per matrix
+      # entry.
+      - name: go mod tidy is clean
+        run: |
+          go mod tidy
+          if ! git diff --quiet go.mod go.sum; then
+            echo "::error::go mod tidy produced changes; commit them"
+            git diff go.mod go.sum
+            exit 1
+          fi
+
       - name: go vet
         run: go vet ./...
