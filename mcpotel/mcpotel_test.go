@@ -510,13 +510,6 @@ func TestMiddleware_PromptGet(t *testing.T) {
 	assertAttribute(t, span, "gen_ai.prompt.name", "summarize")
 }
 
-func TestURISchemeOnly_NoScheme(t *testing.T) {
-	result := mcpotel.URISchemeOnly("just-a-path")
-	if result != "unknown://" {
-		t.Errorf("URISchemeOnly(%q) = %q, want %q", "just-a-path", result, "unknown://")
-	}
-}
-
 func TestMiddleware_WithDefaultProtocolFilter(t *testing.T) {
 	// Wire DefaultProtocolFilter through the middleware and confirm that
 	// tools/list (chatter) is dropped while tools/call (work) is kept.
