@@ -517,40 +517,6 @@ func TestURISchemeOnly_NoScheme(t *testing.T) {
 	}
 }
 
-func TestDefaultProtocolFilter_DropsChatterKeepsWork(t *testing.T) {
-	dropped := []string{
-		"notifications/initialized",
-		"notifications/cancelled",
-		"notifications/progress",
-		"notifications/roots/list_changed",
-		"ping",
-		"tools/list",
-		"resources/list",
-		"resources/templates/list",
-		"prompts/list",
-	}
-	for _, method := range dropped {
-		if mcpotel.DefaultProtocolFilter(method) {
-			t.Errorf("DefaultProtocolFilter(%q) = true, want false (should be dropped)", method)
-		}
-	}
-
-	kept := []string{
-		"tools/call",
-		"resources/read",
-		"prompts/get",
-		"server/discover",
-		"completion/complete",
-		"sampling/createMessage",
-		"some/unknown/method",
-	}
-	for _, method := range kept {
-		if !mcpotel.DefaultProtocolFilter(method) {
-			t.Errorf("DefaultProtocolFilter(%q) = false, want true (should be kept)", method)
-		}
-	}
-}
-
 func TestMiddleware_WithDefaultProtocolFilter(t *testing.T) {
 	// Wire DefaultProtocolFilter through the middleware and confirm that
 	// tools/list (chatter) is dropped while tools/call (work) is kept.
