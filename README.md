@@ -1,9 +1,12 @@
 # mcp-otel-go
 
-[![Go Report Card](https://goreportcard.com/badge/github.com/olgasafonova/mcp-otel-go)](https://goreportcard.com/report/github.com/olgasafonova/mcp-otel-go)
 [![CI](https://github.com/olgasafonova/mcp-otel-go/actions/workflows/ci.yml/badge.svg)](https://github.com/olgasafonova/mcp-otel-go/actions/workflows/ci.yml)
 [![Go Reference](https://pkg.go.dev/badge/github.com/olgasafonova/mcp-otel-go/mcpotel.svg)](https://pkg.go.dev/github.com/olgasafonova/mcp-otel-go/mcpotel)
 [![codecov](https://codecov.io/gh/olgasafonova/mcp-otel-go/branch/main/graph/badge.svg)](https://codecov.io/gh/olgasafonova/mcp-otel-go)
+[![CodeScene Code Health](https://img.shields.io/badge/CodeScene_Code_Health-9.7-2ea44f)](https://codescene.io/docs/guides/technical/code-health.html)
+[![Release](https://img.shields.io/github/v/tag/olgasafonova/mcp-otel-go?sort=semver&label=release)](https://github.com/olgasafonova/mcp-otel-go/tags)
+<!-- Code Health badge: average of mcpotel/*.go scored with the CodeScene MCP (code_health_score), measured 09-08-2026 at f3c9c3a. Re-measure and update the badge value when mcpotel/ changes. -->
+
 
 OpenTelemetry (OTel) tracing and metrics for Go MCP servers. One function call instruments every method in a [go-sdk](https://github.com/modelcontextprotocol/go-sdk) server, following the [OTel semantic conventions for MCP](https://opentelemetry.io/docs/specs/semconv/gen-ai/mcp/).
 
