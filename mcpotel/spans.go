@@ -45,14 +45,7 @@ func extractTarget(method string, req mcp.Request) string {
 
 	switch method {
 	case "tools/call":
-		// The server-side middleware receives CallToolParamsRaw (raw JSON arguments),
-		// while client-side middleware receives CallToolParams. Both have a Name field.
-		switch p := params.(type) {
-		case *mcp.CallToolParamsRaw:
-			return p.Name
-		case *mcp.CallToolParams:
-			return p.Name
-		}
+		return toolName(params)
 	case "resources/read":
 		if p, ok := params.(*mcp.ReadResourceParams); ok {
 			return p.URI
@@ -63,6 +56,28 @@ func extractTarget(method string, req mcp.Request) string {
 		}
 	}
 	return ""
+}
+
+// toolName extracts the tool name from tools/call params. The server-side
+// middleware receives CallToolParamsRaw (raw JSON arguments), while
+// client-side middleware receives CallToolParams. Both have a Name field.
+func toolName(params mcp.Params) string {
+	switch p := params.(type) {
+	case *mcp.CallToolParamsRaw:
+		return p.Name
+	case *mcp.CallToolParams:
+		return p.Name
+	}
+	return ""
+}
+
+// displayedTarget applies URI redaction for resource reads. The redact
+// function is never nil: resolve() defaults it to URISchemeOnly.
+func displayedTarget(method, target string, redact func(string) string) string {
+	if method == "resources/read" && target != "" {
+		return redact(target)
+	}
+	return target
 }
 
 // spanName builds the span name following the convention: "{method} {target}".

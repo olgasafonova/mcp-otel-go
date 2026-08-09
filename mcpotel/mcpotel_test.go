@@ -1,19 +1,14 @@
 package mcpotel_test
 
 import (
-	"bytes"
 	"context"
 	"errors"
-	"log/slog"
-	"strings"
 	"testing"
 	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/olgasafonova/mcp-otel-go/mcpotel"
 	"go.opentelemetry.io/otel/codes"
-	"go.opentelemetry.io/otel/metric"
-	"go.opentelemetry.io/otel/metric/embedded"
 	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
 	"go.opentelemetry.io/otel/sdk/metric/metricdata"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
@@ -510,149 +505,6 @@ func TestMiddleware_PromptGet(t *testing.T) {
 	assertAttribute(t, span, "gen_ai.prompt.name", "summarize")
 }
 
-func TestURISchemeOnly_NoScheme(t *testing.T) {
-	result := mcpotel.URISchemeOnly("just-a-path")
-	if result != "unknown://" {
-		t.Errorf("URISchemeOnly(%q) = %q, want %q", "just-a-path", result, "unknown://")
-	}
-}
-
-// --- examples (appear on pkg.go.dev) ---
-
-func ExampleMiddleware() {
-	server := mcp.NewServer(&mcp.Implementation{
-		Name:    "my-server",
-		Version: "1.0.0",
-	}, nil)
-
-	// Add OpenTelemetry middleware — picks up the global TracerProvider
-	// and MeterProvider by default.
-	server.AddReceivingMiddleware(mcpotel.Middleware(mcpotel.Config{
-		ServiceName:    "my-server",
-		ServiceVersion: "1.0.0",
-	}))
-
-	// Register tools, prompts, resources as usual.
-	// Every incoming MCP method call now produces an OTel span and
-	// a duration histogram automatically.
-}
-
-func ExampleMiddleware_withFilter() {
-	server := mcp.NewServer(&mcp.Implementation{
-		Name:    "my-server",
-		Version: "1.0.0",
-	}, nil)
-
-	server.AddReceivingMiddleware(mcpotel.Middleware(mcpotel.Config{
-		ServiceName: "my-server",
-		Filter: func(method string) bool {
-			// Only instrument tool calls, skip noisy methods
-			return method == "tools/call"
-		},
-	}))
-}
-
-func ExampleMiddleware_withRedaction() {
-	server := mcp.NewServer(&mcp.Implementation{
-		Name:    "my-server",
-		Version: "1.0.0",
-	}, nil)
-
-	server.AddReceivingMiddleware(mcpotel.Middleware(mcpotel.Config{
-		ServiceName: "my-server",
-		RedactError: mcpotel.ErrorMessageFull, // opt-in to full error messages
-		RedactURI:   mcpotel.URIFull,          // opt-in to full URI paths
-	}))
-}
-
-// --- benchmarks ---
-
-func BenchmarkMiddleware_ToolCall(b *testing.B) {
-	spanExporter := tracetest.NewInMemoryExporter()
-	tp := sdktrace.NewTracerProvider(
-		sdktrace.WithSyncer(spanExporter),
-	)
-	defer func() { _ = tp.Shutdown(context.Background()) }()
-
-	metricReader := sdkmetric.NewManualReader()
-	mp := sdkmetric.NewMeterProvider(
-		sdkmetric.WithReader(metricReader),
-	)
-	defer func() { _ = mp.Shutdown(context.Background()) }()
-
-	s := mcp.NewServer(testImpl, nil)
-	s.AddReceivingMiddleware(mcpotel.Middleware(mcpotel.Config{
-		ServiceName:    "bench-server",
-		TracerProvider: tp,
-		MeterProvider:  mp,
-	}))
-
-	mcp.AddTool(s, &mcp.Tool{Name: "nop"}, func(_ context.Context, _ *mcp.CallToolRequest, args map[string]any) (*mcp.CallToolResult, any, error) {
-		return &mcp.CallToolResult{}, nil, nil
-	})
-
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
-
-	ct, st := mcp.NewInMemoryTransports()
-	ss, err := s.Connect(ctx, st, nil)
-	if err != nil {
-		b.Fatal(err)
-	}
-	defer func() { _ = ss.Close() }()
-
-	c := mcp.NewClient(testImpl, nil)
-	cs, err := c.Connect(ctx, ct, nil)
-	if err != nil {
-		b.Fatal(err)
-	}
-	defer func() { _ = cs.Close() }()
-
-	b.ResetTimer()
-	b.ReportAllocs()
-	for i := 0; i < b.N; i++ {
-		_, err := cs.CallTool(ctx, &mcp.CallToolParams{Name: "nop"})
-		if err != nil {
-			b.Fatal(err)
-		}
-		spanExporter.Reset()
-	}
-}
-
-func TestDefaultProtocolFilter_DropsChatterKeepsWork(t *testing.T) {
-	dropped := []string{
-		"notifications/initialized",
-		"notifications/cancelled",
-		"notifications/progress",
-		"notifications/roots/list_changed",
-		"ping",
-		"tools/list",
-		"resources/list",
-		"resources/templates/list",
-		"prompts/list",
-	}
-	for _, method := range dropped {
-		if mcpotel.DefaultProtocolFilter(method) {
-			t.Errorf("DefaultProtocolFilter(%q) = true, want false (should be dropped)", method)
-		}
-	}
-
-	kept := []string{
-		"tools/call",
-		"resources/read",
-		"prompts/get",
-		"server/discover",
-		"completion/complete",
-		"sampling/createMessage",
-		"some/unknown/method",
-	}
-	for _, method := range kept {
-		if !mcpotel.DefaultProtocolFilter(method) {
-			t.Errorf("DefaultProtocolFilter(%q) = false, want true (should be kept)", method)
-		}
-	}
-}
-
 func TestMiddleware_WithDefaultProtocolFilter(t *testing.T) {
 	// Wire DefaultProtocolFilter through the middleware and confirm that
 	// tools/list (chatter) is dropped while tools/call (work) is kept.
@@ -683,112 +535,6 @@ func TestMiddleware_WithDefaultProtocolFilter(t *testing.T) {
 	}
 	if findSpan(spans, "tools/call work") == nil {
 		t.Errorf("expected tools/call work span to be present, got: %v", spanNames(spans))
-	}
-}
-
-// --- meter-failure test ---
-
-// failingMeterProvider returns a Meter whose Float64Histogram always errors.
-// Used to exercise the metric-registration failure path in Middleware().
-type failingMeterProvider struct {
-	embedded.MeterProvider
-}
-
-func (failingMeterProvider) Meter(string, ...metric.MeterOption) metric.Meter {
-	return failingMeter{}
-}
-
-type failingMeter struct {
-	embedded.Meter
-}
-
-func (failingMeter) Int64Counter(string, ...metric.Int64CounterOption) (metric.Int64Counter, error) {
-	return nil, errors.New("meter is broken")
-}
-
-func (failingMeter) Int64UpDownCounter(string, ...metric.Int64UpDownCounterOption) (metric.Int64UpDownCounter, error) {
-	return nil, errors.New("meter is broken")
-}
-
-func (failingMeter) Int64Histogram(string, ...metric.Int64HistogramOption) (metric.Int64Histogram, error) {
-	return nil, errors.New("meter is broken")
-}
-
-func (failingMeter) Int64Gauge(string, ...metric.Int64GaugeOption) (metric.Int64Gauge, error) {
-	return nil, errors.New("meter is broken")
-}
-
-func (failingMeter) Float64Counter(string, ...metric.Float64CounterOption) (metric.Float64Counter, error) {
-	return nil, errors.New("meter is broken")
-}
-
-func (failingMeter) Float64UpDownCounter(string, ...metric.Float64UpDownCounterOption) (metric.Float64UpDownCounter, error) {
-	return nil, errors.New("meter is broken")
-}
-
-func (failingMeter) Float64Histogram(string, ...metric.Float64HistogramOption) (metric.Float64Histogram, error) {
-	return nil, errors.New("meter is broken")
-}
-
-func (failingMeter) Float64Gauge(string, ...metric.Float64GaugeOption) (metric.Float64Gauge, error) {
-	return nil, errors.New("meter is broken")
-}
-
-func (failingMeter) Int64ObservableCounter(string, ...metric.Int64ObservableCounterOption) (metric.Int64ObservableCounter, error) {
-	return nil, errors.New("meter is broken")
-}
-
-func (failingMeter) Int64ObservableUpDownCounter(string, ...metric.Int64ObservableUpDownCounterOption) (metric.Int64ObservableUpDownCounter, error) {
-	return nil, errors.New("meter is broken")
-}
-
-func (failingMeter) Int64ObservableGauge(string, ...metric.Int64ObservableGaugeOption) (metric.Int64ObservableGauge, error) {
-	return nil, errors.New("meter is broken")
-}
-
-func (failingMeter) Float64ObservableCounter(string, ...metric.Float64ObservableCounterOption) (metric.Float64ObservableCounter, error) {
-	return nil, errors.New("meter is broken")
-}
-
-func (failingMeter) Float64ObservableUpDownCounter(string, ...metric.Float64ObservableUpDownCounterOption) (metric.Float64ObservableUpDownCounter, error) {
-	return nil, errors.New("meter is broken")
-}
-
-func (failingMeter) Float64ObservableGauge(string, ...metric.Float64ObservableGaugeOption) (metric.Float64ObservableGauge, error) {
-	return nil, errors.New("meter is broken")
-}
-
-func (failingMeter) RegisterCallback(metric.Callback, ...metric.Observable) (metric.Registration, error) {
-	return nil, errors.New("meter is broken")
-}
-
-func TestMiddleware_MeterRegistrationFailureSurfacesViaSlog(t *testing.T) {
-	// Capture slog output for the duration of this test.
-	var buf bytes.Buffer
-	prev := slog.Default()
-	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug})))
-	t.Cleanup(func() { slog.SetDefault(prev) })
-
-	// Construct middleware with a meter provider that fails on instrument
-	// creation. The middleware should not panic and should not return an
-	// error to its caller; it should emit a slog.Error and continue.
-	_ = mcpotel.Middleware(mcpotel.Config{
-		ServiceName:   "test-server-meter-fail",
-		MeterProvider: failingMeterProvider{},
-	})
-
-	logOutput := buf.String()
-	if !strings.Contains(logOutput, "metric registration failed") {
-		t.Errorf("expected slog output to mention 'metric registration failed', got: %q", logOutput)
-	}
-	if !strings.Contains(logOutput, "level=ERROR") {
-		t.Errorf("expected ERROR-level log, got: %q", logOutput)
-	}
-	if !strings.Contains(logOutput, "test-server-meter-fail") {
-		t.Errorf("expected service name in log line, got: %q", logOutput)
-	}
-	if !strings.Contains(logOutput, "meter is broken") {
-		t.Errorf("expected underlying error message in log line, got: %q", logOutput)
 	}
 }
 

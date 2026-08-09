@@ -165,28 +165,8 @@ func Middleware(cfg Config) mcp.Middleware {
 				return next(ctx, method, req)
 			}
 
-			target := extractTarget(method, req)
-
-			// Apply URI redaction for resource reads. r.redactURI is never nil:
-			// resolve() defaults it to URISchemeOnly.
-			displayTarget := target
-			if method == "resources/read" && target != "" {
-				displayTarget = r.redactURI(target)
-			}
-
-			name := spanName(method, displayTarget)
-
-			// Pre-allocate for the common case: method + session + target + error.
-			attrs := make([]attribute.KeyValue, 0, 4)
-			attrs = append(attrs, AttrMCPMethodName.String(method))
-
-			if session := req.GetSession(); session != nil {
-				if id := session.ID(); id != "" {
-					attrs = append(attrs, AttrMCPSessionID.String(id))
-				}
-			}
-
-			appendTargetAttrs(&attrs, method, displayTarget)
+			displayTarget := displayedTarget(method, extractTarget(method, req), r.redactURI)
+			attrs := requestAttrs(method, displayTarget, req)
 
 			// SEP-414: link this span to the caller's trace by extracting W3C
 			// trace context from the request's `_meta` BEFORE starting the
@@ -198,7 +178,7 @@ func Middleware(cfg Config) mcp.Middleware {
 			// normal root span here.
 			ctx = r.propagator.Extract(ctx, carrierFor(req))
 
-			ctx, span := r.tracer.Start(ctx, name,
+			ctx, span := r.tracer.Start(ctx, spanName(method, displayTarget),
 				trace.WithSpanKind(trace.SpanKindServer),
 				trace.WithAttributes(attrs...),
 			)
@@ -208,15 +188,7 @@ func Middleware(cfg Config) mcp.Middleware {
 			result, err := next(ctx, method, req)
 			duration := time.Since(start)
 
-			// Determine error message from either surface.
-			var errMsg string
-			if err != nil {
-				errMsg = r.redactErr(err)
-			} else {
-				errMsg = extractToolError(result, r.redactErr)
-			}
-
-			if errMsg != "" {
+			if errMsg := callErrMsg(result, err, r.redactErr); errMsg != "" {
 				recordError(span, &attrs, errMsg)
 			} else {
 				span.SetStatus(codes.Ok, "")
@@ -229,6 +201,31 @@ func Middleware(cfg Config) mcp.Middleware {
 			return result, err
 		}
 	}
+}
+
+// requestAttrs builds the span and metric attributes for an incoming call.
+// Pre-allocates for the common case: method + session + target + error.
+func requestAttrs(method, target string, req mcp.Request) []attribute.KeyValue {
+	attrs := make([]attribute.KeyValue, 0, 4)
+	attrs = append(attrs, AttrMCPMethodName.String(method))
+
+	if session := req.GetSession(); session != nil {
+		if id := session.ID(); id != "" {
+			attrs = append(attrs, AttrMCPSessionID.String(id))
+		}
+	}
+
+	appendTargetAttrs(&attrs, method, target)
+	return attrs
+}
+
+// callErrMsg determines the error message from either surface: a Go error
+// from the handler chain, or a tool result carrying IsError.
+func callErrMsg(result mcp.Result, err error, redact func(error) string) string {
+	if err != nil {
+		return redact(err)
+	}
+	return extractToolError(result, redact)
 }
 
 // --- Built-in redaction functions ---
