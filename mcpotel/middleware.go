@@ -203,15 +203,6 @@ func Middleware(cfg Config) mcp.Middleware {
 	}
 }
 
-// displayedTarget applies URI redaction for resource reads. The redact
-// function is never nil: resolve() defaults it to URISchemeOnly.
-func displayedTarget(method, target string, redact func(string) string) string {
-	if method == "resources/read" && target != "" {
-		return redact(target)
-	}
-	return target
-}
-
 // requestAttrs builds the span and metric attributes for an incoming call.
 // Pre-allocates for the common case: method + session + target + error.
 func requestAttrs(method, target string, req mcp.Request) []attribute.KeyValue {

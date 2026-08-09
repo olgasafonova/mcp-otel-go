@@ -71,6 +71,15 @@ func toolName(params mcp.Params) string {
 	return ""
 }
 
+// displayedTarget applies URI redaction for resource reads. The redact
+// function is never nil: resolve() defaults it to URISchemeOnly.
+func displayedTarget(method, target string, redact func(string) string) string {
+	if method == "resources/read" && target != "" {
+		return redact(target)
+	}
+	return target
+}
+
 // spanName builds the span name following the convention: "{method} {target}".
 // If no target is available, the span name is just the method.
 func spanName(method, target string) string {
