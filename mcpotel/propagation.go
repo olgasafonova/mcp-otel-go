@@ -61,9 +61,12 @@ func (c metaCarrier) Keys() []string {
 // with no params or no `_meta` yields an empty carrier, and Extract against an
 // empty carrier is a no-op that leaves the context unchanged, so the caller
 // needs no special case.
+//
+// The nil test goes through isNilRef because GetParams can return a typed nil,
+// which an `== nil` compare misses. See isNilRef for why that shape arrives.
 func carrierFor(req mcp.Request) propagation.TextMapCarrier {
 	params := req.GetParams()
-	if params == nil {
+	if isNilRef(params) {
 		return metaCarrier(nil)
 	}
 	return metaCarrier(params.GetMeta())
