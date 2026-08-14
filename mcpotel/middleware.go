@@ -209,7 +209,10 @@ func requestAttrs(method, target string, req mcp.Request) []attribute.KeyValue {
 	attrs := make([]attribute.KeyValue, 0, 4)
 	attrs = append(attrs, AttrMCPMethodName.String(method))
 
-	if session := req.GetSession(); session != nil {
+	// isNilRef rather than `!= nil`: GetSession returns the request's session
+	// field verbatim, so an unpopulated one is a typed nil and ID() would
+	// read a field off the nil receiver.
+	if session := req.GetSession(); !isNilRef(session) {
 		if id := session.ID(); id != "" {
 			attrs = append(attrs, AttrMCPSessionID.String(id))
 		}

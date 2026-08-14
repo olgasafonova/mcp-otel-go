@@ -38,8 +38,10 @@ const instrumentationName = "github.com/olgasafonova/mcp-otel-go/mcpotel"
 // the request parameters. For tools/call it returns the tool name, for
 // resources/read the URI, and for prompts/get the prompt name.
 func extractTarget(method string, req mcp.Request) string {
+	// isNilRef rather than `== nil`: a request that arrived with no params
+	// yields a typed nil, and the field reads below would dereference it.
 	params := req.GetParams()
-	if params == nil {
+	if isNilRef(params) {
 		return ""
 	}
 
